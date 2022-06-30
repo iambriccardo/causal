@@ -103,7 +103,7 @@ impl<T: Display + Eq + Hash + Copy> Display for VectorClock<T> {
         let mut output = String::from("");
 
         for (replica_id, clock) in &self.vector {
-            output.push_str(&format!("Replica {} - {}\n", replica_id, clock));
+            output.push_str(&format!("[r:{}, s:{}] ", replica_id, clock));
         }
 
         write!(f, "{}", output)

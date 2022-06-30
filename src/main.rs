@@ -11,19 +11,27 @@ use crate::causal_actix::ActixCommand::Increment;
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
 use crate::causal_time::ClockComparison::{Concurrent, Greater};
 use crate::causal_time::VectorClock;
-use crate::CausalMessage::Connect;
+use crate::CausalMessage::{Command, Connect};
 
 mod causal_time;
 mod causal_core;
 mod causal_actix;
 mod causal_impl;
 
-fn send(replicas: &HashMap<ReplicaId, CausalReceiver>, replica_id: ReplicaId, message: CausalMessage) {
+fn send<EVENT: Send + Clone>(replicas: &HashMap<ReplicaId, CausalReceiver<EVENT>>, replica_id: ReplicaId, message: CausalMessage<EVENT>) {
     replicas
         .get(&replica_id)
         .unwrap()
         .do_send(message)
         .expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
+}
+
+fn connect<EVENT: Send + Clone>(replicas: &HashMap<ReplicaId, CausalReceiver<EVENT>>, from: ReplicaId, to: ReplicaId) {
+    send(
+        replicas,
+        from,
+        Connect(None, to, replicas.get(&to).unwrap().clone()),
+    );
 }
 
 fn main() {
@@ -39,17 +47,15 @@ fn main() {
         }
     });
 
-    send(
-        &replicas,
-        0,
-        Connect(None, 1, replicas.get(&1).unwrap().clone())
-    );
+    // We make two increments in replica 0.
+    send(&replicas, 0, Command(None, Increment));
+    send(&replicas, 0, Command(None, Increment));
 
-    send(
-        &replicas,
-        1,
-        Connect(None, 0, replicas.get(&0).unwrap().clone())
-    );
+    // We make two increments in replica 1.
+    send(&replicas, 1, Command(None, Increment));
+
+    // We connect replica 1 -> 0 in order to fetch data.
+    connect(&replicas, 1, 0);
 
     system.run().unwrap();
 }

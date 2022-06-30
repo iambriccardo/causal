@@ -1,6 +1,8 @@
 use std::env::var;
-use crate::{CRDT, Event, EventStore};
+
+use crate::{CRDT, Event, EventStore, ReplicaState};
 use crate::causal_actix::ActixCommand;
+use crate::causal_core::SeqNr;
 
 pub struct Counter {
     value: u64,
@@ -38,22 +40,38 @@ impl CRDT<u64, ActixCommand, u64> for Counter {
     }
 }
 
-pub struct InMemory;
+pub struct InMemory {
+    events: Vec<Event<u64>>,
+}
 
-impl EventStore for InMemory {
-    fn save_snapshot<S>(&self, state: S) {
+impl InMemory {
+    pub fn create() -> InMemory {
+        InMemory {
+            events: vec![]
+        }
+    }
+}
 
+impl EventStore<Counter, u64, ActixCommand, u64> for InMemory {
+    fn save_snapshot(&mut self, state: ReplicaState<Counter, u64, ActixCommand, u64>) {
+        todo!()
     }
 
-    fn load_snapshot<S>(&self) -> Option<S> {
+    fn load_snapshot(&self) -> Option<ReplicaState<Counter, u64, ActixCommand, u64>> {
         None
     }
 
-    fn save_events<E>(&self, events: Vec<Event<E>>) {
-
+    fn save_events(&mut self, events: Vec<Event<u64>>) {
+        events.iter().for_each(|event| self.events.push(event.clone()));
     }
 
-    fn load_events<E>(&self, start_seq_nr: u64) -> Vec<Event<E>> {
-        vec![]
+    fn load_events(&self, start_seq_nr: SeqNr) -> Vec<Event<u64>> {
+        self.events
+            .clone()
+            .into_iter()
+            .filter(|event| {
+                event.local_seq_nr >= start_seq_nr
+            })
+            .collect()
     }
 }

@@ -2,6 +2,7 @@ use std::cmp;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
+use actix::ActorStreamExt;
 use itertools::max;
 
 use crate::{Concurrent, Greater, VectorClock};
@@ -18,16 +19,19 @@ pub type ObservedMap = HashMap<ReplicaId, SeqNr>;
 
 pub struct Causal;
 
-pub struct Event<E> {
+pub struct Event<EVENT>
+    where EVENT: Clone
+{
     pub origin: ReplicaId,
     pub origin_seq_nr: SeqNr,
     pub local_seq_nr: SeqNr,
     pub version: VTime,
-    pub data: E,
+    pub data: EVENT,
 }
 
 pub struct ReplicaState<C, STATE, CMD, EVENT>
-    where C: CRDT<STATE, CMD, EVENT> + Clone
+    where C: CRDT<STATE, CMD, EVENT> + Clone,
+          EVENT: Clone
 {
     pub id: ReplicaId,
     pub seq_nr: SeqNr,
@@ -42,7 +46,9 @@ pub struct ReplicaState<C, STATE, CMD, EVENT>
 
 /** TRAITS **/
 
-pub trait CRDT<STATE, CMD, EVENT> {
+pub trait CRDT<STATE, CMD, EVENT>
+    where EVENT: Clone
+{
     // Creates the default/identity of the CRDT.
     fn default() -> Self;
     // Queries the state of the CRDT.
@@ -53,23 +59,41 @@ pub trait CRDT<STATE, CMD, EVENT> {
     fn effect(&mut self, event: &Event<EVENT>);
 }
 
-pub trait EventStore {
-    fn save_snapshot<S>(&self, state: S);
-    fn load_snapshot<S>(&self) -> Option<S>;
+pub trait EventStore<C, STATE, CMD, EVENT>
+    where C: CRDT<STATE, CMD, EVENT> + Clone,
+          EVENT: Clone
+{
+    fn save_snapshot(&mut self, state: ReplicaState<C, STATE, CMD, EVENT>);
+    fn load_snapshot(&self) -> Option<ReplicaState<C, STATE, CMD, EVENT>>;
 
-    fn save_events<E>(&self, events: Vec<Event<E>>);
-    fn load_events<E>(&self, start_seq_nr: SeqNr) -> Vec<Event<E>>;
+    fn save_events(&mut self, events: Vec<Event<EVENT>>);
+    fn load_events(&self, start_seq_nr: SeqNr) -> Vec<Event<EVENT>>;
 }
 
 
 /** IMPLEMENTATIONS **/
+
+impl<EVENT> Clone for Event<EVENT>
+    where EVENT: Clone
+{
+    fn clone(&self) -> Self {
+        Event {
+            origin: self.origin,
+            origin_seq_nr: self.origin_seq_nr,
+            local_seq_nr: self.local_seq_nr,
+            version: self.version.clone(),
+            data: self.data.clone(),
+        }
+    }
+}
 
 impl Causal {
     // TODO: implement here methods with causal_core's logic.
 }
 
 impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
-    where C: CRDT<STATE, CMD, EVENT> + Clone
+    where C: CRDT<STATE, CMD, EVENT> + Clone,
+          EVENT: Clone
 {
     pub fn new(id: ReplicaId, seq_nr: SeqNr, version: VTime, observed: ObservedMap, crdt: C) -> ReplicaState<C, STATE, CMD, EVENT> {
         ReplicaState {
@@ -111,7 +135,7 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
         );
     }
 
-    pub fn process_command(&mut self, command: &CMD, event_store: &impl EventStore) -> ReplicaState<C, STATE, CMD, EVENT> {
+    pub fn process_command(&mut self, command: &CMD, event_store: &mut impl EventStore<C, STATE, CMD, EVENT>) -> ReplicaState<C, STATE, CMD, EVENT> {
         // We increment both the sequence number and the vector clock for this replica.
         let seq_nr = self.seq_nr + 1;
         self.version.increment(self.id);
@@ -137,10 +161,23 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
         );
     }
 
-    pub fn process_replay(&mut self, seq_nr: SeqNr, version: VTime) -> Vec<Event<EVENT>> {
-        let events = vec![];
+    pub fn process_connect(&mut self, replica_id: ReplicaId) -> (SeqNr, VTime) {
+        return (
+            *self.observed.get(&replica_id).or(Some(&0)).unwrap() + 1,
+            self.version.clone()
+        );
+    }
 
-        return events;
+    // TODO: implement fetch limit in order to have an upper bound.
+    pub fn process_replay(&mut self, seq_nr: SeqNr, version: VTime, event_store: &impl EventStore<C, STATE, CMD, EVENT>) -> (SeqNr, Vec<Event<EVENT>>) {
+        let mut last_seq_nr = 0;
+        let events = event_store.load_events(seq_nr).clone().into_iter().filter(|event| {
+            last_seq_nr = cmp::max(last_seq_nr, event.local_seq_nr);
+            let comparison = event.version.compare(&version);
+            comparison == Greater || comparison == Concurrent
+        }).collect();
+
+        return (last_seq_nr, events);
     }
 
     pub fn unseen(&self, event: &Event<EVENT>) -> bool {
