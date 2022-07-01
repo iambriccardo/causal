@@ -1,10 +1,6 @@
 use std::collections::HashMap;
-use std::fmt::format;
-use std::ops::Add;
-use std::path::Component::CurDir;
 
-use actix::{Actor, Addr, AsyncContext, Context, Handler, Recipient, System};
-use actix::prelude::*;
+use actix::System;
 
 use crate::causal_actix::{CausalMessage, CausalReceiver, Replica};
 use crate::causal_actix::ActixCommand::Increment;
@@ -30,7 +26,7 @@ fn connect<EVENT: Send + Clone>(replicas: &HashMap<ReplicaId, CausalReceiver<EVE
     send(
         replicas,
         from,
-        Connect(None, to, replicas.get(&to).unwrap().clone()),
+        Connect(to, replicas.get(&to).unwrap().clone()),
     );
 }
 
@@ -48,14 +44,15 @@ fn main() {
     });
 
     // We make two increments in replica 0.
-    send(&replicas, 0, Command(None, Increment));
-    send(&replicas, 0, Command(None, Increment));
+    send(&replicas, 0, Command(Increment));
+    send(&replicas, 0, Command(Increment));
 
     // We make two increments in replica 1.
-    send(&replicas, 1, Command(None, Increment));
+    send(&replicas, 1, Command(Increment));
 
     // We connect replica 1 -> 0 in order to fetch data.
     connect(&replicas, 1, 0);
+    connect(&replicas, 0, 1);
 
     system.run().unwrap();
 }

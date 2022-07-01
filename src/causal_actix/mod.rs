@@ -1,15 +1,11 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::io::Cursor;
-use std::ops::Add;
 
-use actix::{Actor, Addr, AsyncContext, Context, Handler, Recipient, System};
+use actix::{Actor, Context, Handler, Recipient};
 use actix::prelude::*;
 
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState, SeqNr, VTime};
 use crate::causal_impl::{Counter, InMemory};
-use crate::causal_time::ClockComparison::{Concurrent, Greater};
-use crate::causal_time::VectorClock;
 use crate::CausalMessage::{Command, Connect, Replicate, Replicated};
 
 /** TYPES **/
@@ -26,7 +22,7 @@ impl Display for ActixCommand {
         let mut output = String::from("");
 
         match self {
-            Increment => output.push_str("increment")
+            _ => output.push_str("increment")
         }
 
         write!(f, "{}", output)
@@ -41,28 +37,30 @@ pub enum CausalMessage<EVENT>
     where EVENT: Send + Clone
 {
     // Message that represents the execution of a command in the receiving replica.
-    Command(Option<CausalReceiver<EVENT>>, ActixCommand),
+    Command(ActixCommand),
     // Message that represents the connection of the receiving replica to another.
-    Connect(Option<CausalReceiver<EVENT>>, ReplicaId, CausalReceiver<EVENT>),
+    Connect(ReplicaId, CausalReceiver<EVENT>),
     // Message that represents a request to replicate the content of the receiving replica.
-    Replicate(Option<CausalReceiver<EVENT>>, SeqNr, VTime),
+    Replicate(Option<ReplicaId>, SeqNr, VTime),
     // Message that represents the replicated events that the receiving replica will apply locally.
-    Replicated(Option<CausalReceiver<EVENT>>, SeqNr, Vec<Event<EVENT>>),
+    Replicated(Option<ReplicaId>, SeqNr, Vec<Event<EVENT>>),
 }
 
 
 /** ACTORS **/
 
+type ReplicaEventType = u64;
+
 pub struct Replica {
     id: ReplicaId,
     // TODO: replace with generic CRDT.
-    replica_state: Option<ReplicaState<Counter, u64, ActixCommand, u64>>,
-    replicating_nodes: ReplicasTable<u64>,
+    replica_state: Option<ReplicaState<Counter, u64, ActixCommand, ReplicaEventType>>,
+    replicating_nodes: ReplicasTable<ReplicaEventType>,
     event_store: InMemory,
 }
 
 impl Replica {
-    pub fn start_and_receive(id: ReplicaId) -> CausalReceiver<u64> {
+    pub fn start_and_receive(id: ReplicaId) -> CausalReceiver<ReplicaEventType> {
         Replica {
             id,
             replica_state: None,
@@ -93,77 +91,96 @@ impl Replica {
         self.replica_state = Some(state);
     }
 
-    pub fn handle_connect(&mut self, ctx: &mut <Replica as Actor>::Context, replica_id: ReplicaId, other_replica: CausalReceiver<u64>) {
-        self.replicating_nodes.insert(replica_id, other_replica.clone());
+    pub fn handle_connect(
+        &mut self,
+        replica_id: ReplicaId,
+        replica_receiver: CausalReceiver<ReplicaEventType>,
+    ) {
+        self.replicating_nodes.insert(replica_id, replica_receiver.clone());
 
         let (seq_nr, version) = self.replica_state
             .as_mut()
             .unwrap()
             .process_connect(replica_id);
 
-        other_replica.do_send(
+        replica_receiver.do_send(
             Replicate(
-                Some(ctx.address().recipient()),
+                Some(self.replica_state.as_ref().unwrap().id),
                 seq_nr,
                 version,
             )
         ).expect("Error while sending [REPLICATE] request.")
     }
 
-    pub fn handle_replicate(&mut self, ctx: &mut <Replica as Actor>::Context, sender: CausalReceiver<u64>, seq_nr: SeqNr, version: VTime) {
+    pub fn handle_replicate(
+        &mut self,
+        sender: ReplicaId,
+        seq_nr: SeqNr,
+        version: VTime,
+    ) {
         let (last_seq_nr, events) = self.replica_state
             .as_mut()
             .unwrap()
             .process_replay(seq_nr, version, &self.event_store);
 
-        sender.do_send(
-            Replicated(
-                Some(ctx.address().recipient()),
+        self.replicating_nodes
+            .get(&sender)
+            .expect(&*format!("Replica {} doesn't know about replica {}", self.id, sender))
+            .do_send(Replicated(
+                Some(self.replica_state.as_ref().unwrap().id),
                 last_seq_nr,
                 events,
             )
-        ).expect("Error while sending [REPLICATED] request.");
+            ).expect("Error while sending [REPLICATED] request.");
     }
 
-    pub fn handle_replicated(&mut self) {}
+    pub fn handle_replicated(
+        &mut self,
+        sender: ReplicaId,
+        last_seq_nr: SeqNr,
+        events: Vec<Event<ReplicaEventType>>,
+    ) {
+        let state = self.replica_state
+            .as_mut()
+            .unwrap()
+            .process_replicated(sender, last_seq_nr, events, &mut self.event_store);
+
+        // If a new state has been created as a result of the events received, we are going to apply
+        // it to the replica.
+        if let Some(new_state) = state {
+            self.replica_state = Some(new_state);
+        }
+    }
 }
 
 impl Actor for Replica {
     type Context = Context<Self>;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
-        println!("Replica {} started", self.id);
+    fn started(&mut self, _: &mut Self::Context) {
         self.load_state();
-    }
-
-    fn stopped(&mut self, ctx: &mut Self::Context) {
-        println!("Replica {} stopped", self.id);
     }
 }
 
 impl Handler<CausalMessage<u64>> for Replica {
     type Result = ();
 
-    fn handle(&mut self, msg: CausalMessage<u64>, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: CausalMessage<u64>, _: &mut Self::Context) -> Self::Result {
         match msg {
-            Command(_, command) => {
-                println!("->[COMMAND@{}] with command:{}", self.id, command);
+            Command(command) => {
+                println!("APP-[COMMAND]->@{} with command:{}", self.id, command);
                 self.handle_command(command);
             }
-            Connect(_, replica_id, other_replica) => {
-                println!("->[CONNECT@{}]", self.id);
-                self.handle_connect(ctx, replica_id, other_replica);
+            Connect(replica_id, replica_receiver) => {
+                println!("APP-[CONNECT]->@{} with replica_id: {}", self.id, replica_id);
+                self.handle_connect(replica_id, replica_receiver);
             }
             Replicate(sender, seq_nr, version) => {
-                println!("->[REPLICATE@{}] with seq_nr:{}, version_vector:{}", self.id, seq_nr, version);
-                self.handle_replicate(ctx, sender.unwrap(), seq_nr, version);
+                println!("@{}-[REPLICATE]->@{} with seq_nr:{}, version_vector:{}", sender.unwrap(), self.id, seq_nr, version);
+                self.handle_replicate(sender.unwrap(), seq_nr, version);
             }
-            Replicated(_, last_seq_nr, events) => {
-                println!("->[REPLICATED@{}] with seq_nr:{},n_events:{}", self.id, last_seq_nr, events.len());
-                self.handle_replicated();
-            }
-            _ => {
-                println!("Message is not supported.")
+            Replicated(sender, last_seq_nr, events) => {
+                println!("@{}-[REPLICATED]->@{} with seq_nr:{}, n_events:{}", sender.unwrap(), self.id, last_seq_nr, events.len());
+                self.handle_replicated(sender.unwrap(), last_seq_nr, events);
             }
         }
     }

@@ -1,11 +1,8 @@
-use std::borrow::Borrow;
 use std::cmp::max;
-use std::collections::{HashMap, HashSet};
-use std::collections::hash_map::{Iter, Keys};
+use std::collections::HashMap;
 use std::fmt;
-use std::fmt::{Display, format, Formatter, write};
+use std::fmt::{Display, Formatter};
 use std::hash::Hash;
-use std::iter::Cloned;
 use std::vec::IntoIter;
 
 use itertools::Itertools;
@@ -37,7 +34,7 @@ impl<T> VectorClock<T>
         *self.vector.entry(replica_id).or_insert(0) += 1;
     }
 
-    pub fn merge(&mut self, replica_id: T, other_vector: &VectorClock<T>) {
+    pub fn merge(&mut self, _: T, other_vector: &VectorClock<T>) {
         //self.increment(replica_id);
 
         self.replicas()
@@ -46,12 +43,14 @@ impl<T> VectorClock<T>
             .for_each(|replica_id| {
                 let a = self.vector.get(&replica_id)
                     .or(Some(&0))
-                    .unwrap();
+                    .unwrap()
+                    .clone();
                 let b = other_vector.vector.get(&replica_id)
                     .or(Some(&0))
-                    .unwrap();
+                    .unwrap()
+                    .clone();
 
-                self.vector.insert(replica_id, max(*a, *b));
+                self.vector.insert(replica_id, max(a, b));
             });
     }
 
@@ -115,8 +114,8 @@ mod tests {
     use std::collections::HashMap;
     use std::f32::consts::E;
 
+    use crate::{Greater, VectorClock};
     use crate::vector_clocks::ClockComparison::{Concurrent, Equal, Greater, Less};
-    use crate::VectorClock;
 
     #[test]
     fn increment() {

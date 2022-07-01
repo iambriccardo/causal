@@ -1,5 +1,3 @@
-use std::env::var;
-
 use crate::{CRDT, Event, EventStore, ReplicaState};
 use crate::causal_actix::ActixCommand;
 use crate::causal_core::SeqNr;
@@ -30,8 +28,7 @@ impl CRDT<u64, ActixCommand, u64> for Counter {
     fn prepare(&self, command: &ActixCommand) -> u64 {
         // For this CRDT, given a specific command we just return 1 which is the increment of the counter.
         match command {
-            ActixCommand::Increment => 1,
-            _ => 0
+            ActixCommand::Increment => 1
         }
     }
 
@@ -53,7 +50,7 @@ impl InMemory {
 }
 
 impl EventStore<Counter, u64, ActixCommand, u64> for InMemory {
-    fn save_snapshot(&mut self, state: ReplicaState<Counter, u64, ActixCommand, u64>) {
+    fn save_snapshot(&mut self, _: ReplicaState<Counter, u64, ActixCommand, u64>) {
         todo!()
     }
 

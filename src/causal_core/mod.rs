@@ -2,9 +2,6 @@ use std::cmp;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
-use actix::ActorStreamExt;
-use itertools::max;
-
 use crate::{Concurrent, Greater, VectorClock};
 
 /** TYPES **/
@@ -95,7 +92,13 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
     where C: CRDT<STATE, CMD, EVENT> + Clone,
           EVENT: Clone
 {
-    pub fn new(id: ReplicaId, seq_nr: SeqNr, version: VTime, observed: ObservedMap, crdt: C) -> ReplicaState<C, STATE, CMD, EVENT> {
+    pub fn new(
+        id: ReplicaId,
+        seq_nr: SeqNr,
+        version: VTime,
+        observed: ObservedMap,
+        crdt: C,
+    ) -> ReplicaState<C, STATE, CMD, EVENT> {
         ReplicaState {
             id,
             seq_nr,
@@ -135,7 +138,11 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
         );
     }
 
-    pub fn process_command(&mut self, command: &CMD, event_store: &mut impl EventStore<C, STATE, CMD, EVENT>) -> ReplicaState<C, STATE, CMD, EVENT> {
+    pub fn process_command(
+        &mut self,
+        command: &CMD,
+        event_store: &mut impl EventStore<C, STATE, CMD, EVENT>,
+    ) -> ReplicaState<C, STATE, CMD, EVENT> {
         // We increment both the sequence number and the vector clock for this replica.
         let seq_nr = self.seq_nr + 1;
         self.version.increment(self.id);
@@ -169,15 +176,78 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
     }
 
     // TODO: implement fetch limit in order to have an upper bound.
-    pub fn process_replay(&mut self, seq_nr: SeqNr, version: VTime, event_store: &impl EventStore<C, STATE, CMD, EVENT>) -> (SeqNr, Vec<Event<EVENT>>) {
+    pub fn process_replay(
+        &mut self,
+        seq_nr: SeqNr,
+        version: VTime,
+        event_store: &impl EventStore<C, STATE, CMD, EVENT>,
+    ) -> (SeqNr, Vec<Event<EVENT>>) {
         let mut last_seq_nr = 0;
-        let events = event_store.load_events(seq_nr).clone().into_iter().filter(|event| {
-            last_seq_nr = cmp::max(last_seq_nr, event.local_seq_nr);
-            let comparison = event.version.compare(&version);
-            comparison == Greater || comparison == Concurrent
-        }).collect();
+        let events = event_store
+            .load_events(seq_nr)
+            .clone()
+            .into_iter()
+            .filter(|event| {
+                last_seq_nr = cmp::max(last_seq_nr, event.local_seq_nr);
+                let comparison = event.version.compare(&version);
+                comparison == Greater || comparison == Concurrent
+            })
+            .collect();
 
         return (last_seq_nr, events);
+    }
+
+    pub fn process_replicated(
+        &mut self,
+        sender: ReplicaId,
+        _: SeqNr,
+        events: Vec<Event<EVENT>>,
+        event_store: &mut impl EventStore<C, STATE, CMD, EVENT>,
+    ) -> Option<ReplicaState<C, STATE, CMD, EVENT>> {
+        let mut remote_seq_nr = self.observed
+            .get(&sender)
+            .or(Some(&0))
+            .unwrap()
+            .clone();
+        let mut new_state = None;
+
+        let unseen_events = events
+            .into_iter()
+            .filter(|event| self.unseen(event))
+            .collect::<Vec<Event<EVENT>>>();
+
+        let new_events = unseen_events
+            .into_iter()
+            .map(|event| {
+                let seq_nr = self.seq_nr + 1;
+
+                self.version.merge(self.id, &event.version);
+
+                remote_seq_nr = cmp::max(remote_seq_nr, event.local_seq_nr);
+
+                self.observed.insert(sender, remote_seq_nr);
+
+                new_state = Some(ReplicaState::new(
+                    self.id,
+                    seq_nr,
+                    self.version.clone(),
+                    self.observed.clone(),
+                    self.crdt.clone(),
+                ));
+
+                Event {
+                    origin: event.origin,
+                    origin_seq_nr: event.origin_seq_nr,
+                    local_seq_nr: remote_seq_nr,
+                    version: event.version.clone(),
+                    data: event.data.clone(),
+                }
+            })
+            .collect::<Vec<Event<EVENT>>>();
+
+        event_store.save_events(new_events);
+
+        return new_state;
     }
 
     pub fn unseen(&self, event: &Event<EVENT>) -> bool {
