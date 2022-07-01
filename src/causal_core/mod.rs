@@ -14,8 +14,6 @@ pub type ObservedMap = HashMap<ReplicaId, SeqNr>;
 
 /** DATA STRUCTURES **/
 
-pub struct Causal;
-
 pub struct Event<EVENT>
     where EVENT: Clone
 {
@@ -82,10 +80,6 @@ impl<EVENT> Clone for Event<EVENT>
             data: self.data.clone(),
         }
     }
-}
-
-impl Causal {
-    // TODO: implement here methods with causal_core's logic.
 }
 
 impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
@@ -168,9 +162,21 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
         );
     }
 
-    pub fn process_connect(&mut self, replica_id: ReplicaId) -> (SeqNr, VTime) {
+    // pub fn process_connect(&mut self, replica_id: ReplicaId) -> (SeqNr, VTime) {
+    //     return (
+    //         // We send the next seq number we want. If we didn't observe anything, it will be 1.
+    //         *self.observed.get(&replica_id).or(Some(&0)).unwrap() + 1,
+    //         // We send our version vector because it will be used to avoid duplicates being sent.
+    //         self.version.clone()
+    //     );
+    // }
+
+    pub fn process_sync(&mut self, replica_id: ReplicaId) -> (ReplicaId, SeqNr, VTime) {
         return (
+            self.id,
+            // We send the next seq number we want. If we didn't observe anything, it will be 1.
             *self.observed.get(&replica_id).or(Some(&0)).unwrap() + 1,
+            // We send our version vector because it will be used to avoid duplicates being sent.
             self.version.clone()
         );
     }
@@ -181,29 +187,32 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
         seq_nr: SeqNr,
         version: VTime,
         event_store: &impl EventStore<C, STATE, CMD, EVENT>,
-    ) -> (SeqNr, Vec<Event<EVENT>>) {
+    ) -> (ReplicaId, SeqNr, Vec<Event<EVENT>>) {
+        // By default the last seq nr is 0 and it will change in case some events are consumed.
         let mut last_seq_nr = 0;
         let events = event_store
             .load_events(seq_nr)
             .clone()
             .into_iter()
             .filter(|event| {
+                // For each event we keep track of the maximum seq nr seen so far.
                 last_seq_nr = cmp::max(last_seq_nr, event.local_seq_nr);
                 let comparison = event.version.compare(&version);
                 comparison == Greater || comparison == Concurrent
             })
             .collect();
 
-        return (last_seq_nr, events);
+        return (self.id, last_seq_nr, events);
     }
 
     pub fn process_replicated(
         &mut self,
         sender: ReplicaId,
-        _: SeqNr,
+        _: SeqNr, // The last_seq_nr is not used for now because we just compute it.
         events: Vec<Event<EVENT>>,
         event_store: &mut impl EventStore<C, STATE, CMD, EVENT>,
     ) -> Option<ReplicaState<C, STATE, CMD, EVENT>> {
+        // We get the last observed seq nr of the sender, that is, the replica sending us new events.
         let mut remote_seq_nr = self.observed
             .get(&sender)
             .or(Some(&0))
@@ -211,6 +220,8 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
             .clone();
         let mut new_state = None;
 
+        // We filter all the events received by unseen because in case of concurrency we might have
+        // received some duplicates.
         let unseen_events = events
             .into_iter()
             .filter(|event| self.unseen(event))
@@ -219,14 +230,17 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
         let new_events = unseen_events
             .into_iter()
             .map(|event| {
+                // We increment the local seq nr.
                 let seq_nr = self.seq_nr + 1;
-
+                // We merge the version vector with the incoming vector.
                 self.version.merge(self.id, &event.version);
-
+                // We compute the seq nr until which we have read all the events from sender.
                 remote_seq_nr = cmp::max(remote_seq_nr, event.local_seq_nr);
-
+                // We save the last remote seq nr we know to have read.
                 self.observed.insert(sender, remote_seq_nr);
-
+                // We perform the effect on the crdt.
+                self.crdt.effect(&event);
+                // We compute the new replica state.
                 new_state = Some(ReplicaState::new(
                     self.id,
                     seq_nr,
@@ -234,23 +248,42 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
                     self.observed.clone(),
                     self.crdt.clone(),
                 ));
-
+                // We create a new event to be applied locally with the newly updated local seq nr.
                 Event {
                     origin: event.origin,
                     origin_seq_nr: event.origin_seq_nr,
-                    local_seq_nr: remote_seq_nr,
+                    local_seq_nr: seq_nr,
                     version: event.version.clone(),
                     data: event.data.clone(),
                 }
             })
             .collect::<Vec<Event<EVENT>>>();
 
+        // We store all the modified events into the event store.
         event_store.save_events(new_events);
 
         return new_state;
     }
 
     pub fn unseen(&self, event: &Event<EVENT>) -> bool {
+        // TODO: suspicious implementation which doesn't work well in concurrent cases.
+        //
+        // Supposing we have three replicas 1,2,3 with this initial state (replica 2 pulled from 1):
+        // replica_id -> local_seq_nr-event [vector_clock] [observed]
+        // 1 -> 1-A [1,0,0] []
+        // 2 -> 1-A [1,0,0] [1:1]
+        // 3 -> empty
+        // Suppose now 3 sends a [REPLICATE] request concurrently to both 1 and 2 (containing the vector clock [0,0,0]) and the answer from 2 is applied first:
+        // 1 -> 1-A [1,0,0] []
+        // 2 -> 1-A [1,0,0] [1:1]
+        // 3 -> 1-A [1,0,0] [2:1]
+        // Then answer from 1 is received and unseen() call sees that we observed 0 from 1 and we received an event with seq nr 1, therefore
+        // we apply this event resulting in:
+        // 1 -> 1-A [1,0,0] []
+        // 2 -> 1-A [1,0,0] [1:1]
+        // 3 -> 1-A [1,0,0] 2-A [1,0,0] [2:1,1:1] **DUPLICATE EVENT**
+        //
+        // A possible solution would be to check only the vector clock of the element but this would need further testing.
         match self.observed.get(&event.origin) {
             Some(observed_seq_nr) if event.origin_seq_nr > *observed_seq_nr => true,
             _ => {
@@ -258,5 +291,9 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
                 comparison == Greater || comparison == Concurrent
             }
         }
+    }
+
+    pub fn process_query(&self) -> STATE {
+        self.crdt.query()
     }
 }
