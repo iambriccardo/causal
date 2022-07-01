@@ -31,6 +31,11 @@ fn connect<EVENT: Send + Clone>(replicas: &HashMap<ReplicaId, CausalReceiver<EVE
     );
 }
 
+// TODO:
+// * Verify whether concurrent replicate requests are good or not for the system (consider the unseen() method).
+// * Try a socket based implementation.
+// * Improve general architecture and use of generics.
+// * Implement more complex operation-based CRDTs.
 fn main() {
     let replicas_number: usize = 2;
     let system = System::new();
