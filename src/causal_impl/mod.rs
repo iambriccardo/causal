@@ -38,24 +38,29 @@ impl CRDT<u64, ActixCommand, u64> for Counter {
 }
 
 pub struct InMemory {
+    last_snapshot: Option<ReplicaState<Counter, u64, ActixCommand, u64>>,
     events: Vec<Event<u64>>,
 }
 
 impl InMemory {
     pub fn create() -> InMemory {
         InMemory {
-            events: vec![]
+            last_snapshot: None,
+            events: vec![],
         }
     }
 }
 
 impl EventStore<Counter, u64, ActixCommand, u64> for InMemory {
-    fn save_snapshot(&mut self, _: ReplicaState<Counter, u64, ActixCommand, u64>) {
-        todo!()
+    fn save_snapshot(&mut self, replica_state: &ReplicaState<Counter, u64, ActixCommand, u64>) {
+        self.last_snapshot = Some(replica_state.clone())
     }
 
     fn load_snapshot(&self) -> Option<ReplicaState<Counter, u64, ActixCommand, u64>> {
-        None
+        match &self.last_snapshot {
+            Some(last_snapshot) => Some(last_snapshot.clone()),
+            _ => None
+        }
     }
 
     fn save_events(&mut self, events: Vec<Event<u64>>) {

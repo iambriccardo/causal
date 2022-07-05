@@ -5,7 +5,6 @@ use std::marker::PhantomData;
 use crate::{Concurrent, Greater, VectorClock};
 
 /** TYPES **/
-
 pub type ReplicaId = usize;
 pub type SeqNr = u64;
 pub type VTime = VectorClock<ReplicaId>;
@@ -13,7 +12,6 @@ pub type ObservedMap = HashMap<ReplicaId, SeqNr>;
 
 
 /** DATA STRUCTURES **/
-
 pub struct Event<EVENT>
     where EVENT: Clone
 {
@@ -40,7 +38,6 @@ pub struct ReplicaState<C, STATE, CMD, EVENT>
 
 
 /** TRAITS **/
-
 pub trait CRDT<STATE, CMD, EVENT>
     where EVENT: Clone
 {
@@ -58,7 +55,7 @@ pub trait EventStore<C, STATE, CMD, EVENT>
     where C: CRDT<STATE, CMD, EVENT> + Clone,
           EVENT: Clone
 {
-    fn save_snapshot(&mut self, state: ReplicaState<C, STATE, CMD, EVENT>);
+    fn save_snapshot(&mut self, state: &ReplicaState<C, STATE, CMD, EVENT>);
     fn load_snapshot(&self) -> Option<ReplicaState<C, STATE, CMD, EVENT>>;
 
     fn save_events(&mut self, events: Vec<Event<EVENT>>);
@@ -67,7 +64,6 @@ pub trait EventStore<C, STATE, CMD, EVENT>
 
 
 /** IMPLEMENTATIONS **/
-
 impl<EVENT> Clone for Event<EVENT>
     where EVENT: Clone
 {
@@ -78,6 +74,23 @@ impl<EVENT> Clone for Event<EVENT>
             local_seq_nr: self.local_seq_nr,
             version: self.version.clone(),
             data: self.data.clone(),
+        }
+    }
+}
+
+impl<C, STATE, CMD, EVENT> Clone for ReplicaState<C, STATE, CMD, EVENT>
+    where C: CRDT<STATE, CMD, EVENT> + Clone,
+          EVENT: Clone {
+    fn clone(&self) -> Self {
+        ReplicaState {
+            id: self.id,
+            seq_nr: self.seq_nr,
+            version: self.version.clone(),
+            observed: self.observed.clone(),
+            crdt: self.crdt.clone(),
+            _1: PhantomData,
+            _2: PhantomData,
+            _3: PhantomData,
         }
     }
 }

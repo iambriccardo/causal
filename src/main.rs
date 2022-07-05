@@ -3,14 +3,13 @@ use std::collections::HashMap;
 
 use actix::{Actor, System};
 
-use crate::causal_actix::{Replica, ReturnableCausalMessage, ReturnableCausalRecipient, VoidCausalMessage, VoidCausalRecipient};
+use crate::causal_actix::{Replica, VoidCausalMessage, VoidCausalRecipient};
 use crate::causal_actix::ActixCommand::Increment;
-use crate::causal_actix::ReturnableCausalMessage::Query;
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
 use crate::causal_impl::{Counter, InMemory};
 use crate::causal_time::ClockComparison::{Concurrent, Greater};
 use crate::causal_time::VectorClock;
-use crate::VoidCausalMessage::{Command, Connect, Sync};
+use crate::VoidCausalMessage::{Command, Connect, Query, Sync};
 
 mod causal_time;
 mod causal_core;
@@ -21,18 +20,6 @@ fn send_void<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
     replicas: &HashMap<ReplicaId, VoidCausalRecipient<CMD, EVENT>>,
     replica_id: ReplicaId,
     message: VoidCausalMessage<CMD, EVENT>,
-) {
-    replicas
-        .get(&replica_id)
-        .unwrap()
-        .do_send(message)
-        .expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
-}
-
-fn send_returnable(
-    replicas: &HashMap<ReplicaId, ReturnableCausalRecipient>,
-    replica_id: ReplicaId,
-    message: ReturnableCausalMessage,
 ) {
     replicas
         .get(&replica_id)
@@ -103,9 +90,9 @@ fn main() {
                 "INC" => {
                     send_void(&replicas, replica_id as ReplicaId, Command(Increment));
                 }
-                // "QUERY" => {
-                //     send_returnable(&replicas, replica_id as ReplicaId, Query);
-                // }
+                "QUERY" => {
+                    send_void(&replicas, replica_id as ReplicaId, Query);
+                }
                 "SYNC" => {
                     send_void(&replicas, replica_id as ReplicaId, Sync);
                 }
