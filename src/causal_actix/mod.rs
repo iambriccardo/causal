@@ -73,6 +73,7 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> R
     }
 
     pub fn load_state(&mut self) {
+        // TODO: implement a more efficient state initialization.
         let mut state = self.event_store
             .load_snapshot()
             .or(Some(ReplicaState::create(self.init_id, self.init_crdt.clone())))
