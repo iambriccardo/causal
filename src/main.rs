@@ -1,21 +1,27 @@
 use std::{io, thread};
 use std::collections::HashMap;
 
-use actix::System;
+use actix::{Actor, System};
 
-use crate::causal_actix::{CausalMessage, CausalReceiver, Replica};
+use crate::causal_actix::{Replica, ReturnableCausalMessage, ReturnableCausalRecipient, VoidCausalMessage, VoidCausalRecipient};
 use crate::causal_actix::ActixCommand::Increment;
+use crate::causal_actix::ReturnableCausalMessage::Query;
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
+use crate::causal_impl::{Counter, InMemory};
 use crate::causal_time::ClockComparison::{Concurrent, Greater};
 use crate::causal_time::VectorClock;
-use crate::CausalMessage::{Command, Connect, Query, Sync};
+use crate::VoidCausalMessage::{Command, Connect, Sync};
 
 mod causal_time;
 mod causal_core;
 mod causal_actix;
 mod causal_impl;
 
-fn send<EVENT: Send + Clone>(replicas: &HashMap<ReplicaId, CausalReceiver<EVENT>>, replica_id: ReplicaId, message: CausalMessage<EVENT>) {
+fn send_void<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
+    replicas: &HashMap<ReplicaId, VoidCausalRecipient<CMD, EVENT>>,
+    replica_id: ReplicaId,
+    message: VoidCausalMessage<CMD, EVENT>,
+) {
     replicas
         .get(&replica_id)
         .unwrap()
@@ -23,8 +29,24 @@ fn send<EVENT: Send + Clone>(replicas: &HashMap<ReplicaId, CausalReceiver<EVENT>
         .expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
 }
 
-fn connect<EVENT: Send + Clone>(replicas: &HashMap<ReplicaId, CausalReceiver<EVENT>>, from: ReplicaId, to: ReplicaId) {
-    send(
+fn send_returnable(
+    replicas: &HashMap<ReplicaId, ReturnableCausalRecipient>,
+    replica_id: ReplicaId,
+    message: ReturnableCausalMessage,
+) {
+    replicas
+        .get(&replica_id)
+        .unwrap()
+        .do_send(message)
+        .expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
+}
+
+fn connect<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
+    replicas: &HashMap<ReplicaId, VoidCausalRecipient<CMD, EVENT>>,
+    from: ReplicaId,
+    to: ReplicaId,
+) {
+    send_void(
         replicas,
         from,
         Connect(to, replicas.get(&to).unwrap().clone()),
@@ -34,7 +56,6 @@ fn connect<EVENT: Send + Clone>(replicas: &HashMap<ReplicaId, CausalReceiver<EVE
 // TODO:
 // * Verify whether concurrent replicate requests are good or not for the system (consider the unseen() method).
 // * Try a socket based implementation.
-// * Improve general architecture and use of generics.
 // * Implement more complex operation-based CRDTs.
 fn main() {
     let replicas_number: usize = 2;
@@ -45,7 +66,12 @@ fn main() {
         // We spawn the replicas.
         for id in 0..replicas_number {
             // For each replica we will craft specific messages that will trigger actions towards the CRDT.
-            replicas.insert(id, Replica::start_and_receive(id));
+            let replica = Replica::create(
+                id,
+                Counter::default(),
+                InMemory::create(),
+            );
+            replicas.insert(id, replica.start().recipient());
         }
     });
 
@@ -75,13 +101,13 @@ fn main() {
 
             match action {
                 "INC" => {
-                    send(&replicas, replica_id as ReplicaId, Command(Increment));
+                    send_void(&replicas, replica_id as ReplicaId, Command(Increment));
                 }
-                "QUERY" => {
-                    send(&replicas, replica_id as ReplicaId, Query);
-                }
+                // "QUERY" => {
+                //     send_returnable(&replicas, replica_id as ReplicaId, Query);
+                // }
                 "SYNC" => {
-                    send(&replicas, replica_id as ReplicaId, Sync);
+                    send_void(&replicas, replica_id as ReplicaId, Sync);
                 }
                 &_ => {
                     break;

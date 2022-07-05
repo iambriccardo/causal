@@ -4,14 +4,15 @@ use std::fmt::{Display, Formatter};
 use actix::{Actor, Context, Handler, Recipient};
 use actix::prelude::*;
 
+use crate::causal_actix::ReturnableCausalMessageReturn::QueryReturn;
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState, SeqNr, VTime};
-use crate::causal_impl::{Counter, InMemory};
-use crate::CausalMessage::{Command, Connect, Query, Replicate, Replicated, Sync};
+use crate::VoidCausalMessage::{Command, Connect, Replicate, Replicated, Sync};
 
 /** TYPES **/
-
-pub type ReplicasTable<EVENT> = HashMap<ReplicaId, Recipient<CausalMessage<EVENT>>>;
-pub type CausalReceiver<EVENT> = Recipient<CausalMessage<EVENT>>;
+pub type VoidReplicasTable<CMD, EVENT> = HashMap<ReplicaId, Recipient<VoidCausalMessage<CMD, EVENT>>>;
+pub type VoidCausalRecipient<CMD, EVENT> = Recipient<VoidCausalMessage<CMD, EVENT>>;
+// This special type should only be used for results returned by the actor to the application.
+pub type ReturnableCausalRecipient = Recipient<ReturnableCausalMessage>;
 
 pub enum ActixCommand {
     Increment
@@ -29,53 +30,80 @@ impl Display for ActixCommand {
     }
 }
 
+
 /** MESSAGES **/
 #[derive(Message)]
 #[rtype(result = "()")]
-pub enum CausalMessage<EVENT>
-    where EVENT: Send + Clone
+pub enum VoidCausalMessage<CMD, EVENT>
+    where CMD: Send + Unpin,
+          EVENT: Send + Clone
 {
     // Message that represents the execution of a command in the receiving replica.
-    Command(ActixCommand),
+    Command(CMD),
     // Message that represents the connection of the receiving replica to another.
-    Connect(ReplicaId, CausalReceiver<EVENT>),
+    Connect(ReplicaId, VoidCausalRecipient<CMD, EVENT>),
     // Message that represents the start of sync between the receiving replica and all the replicas connected.
     Sync,
     // Message that represents a request to replicate the content of the receiving replica.
     Replicate(ReplicaId, SeqNr, VTime),
     // Message that represents the replicated events that the receiving replica will apply locally.
     Replicated(ReplicaId, SeqNr, Vec<Event<EVENT>>),
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub enum ReturnableCausalMessage {
     // Message that represents the querying of the replica's crdt state.
     Query,
 }
 
-
-/** ACTORS **/
-
-type ReplicaEventType = u64;
-
-pub struct Replica {
-    id: ReplicaId,
-    // TODO: replace with generic CRDT.
-    replica_state: Option<ReplicaState<Counter, u64, ActixCommand, ReplicaEventType>>,
-    replicating_nodes: ReplicasTable<ReplicaEventType>,
-    event_store: InMemory,
+#[derive(Message)]
+#[rtype(result = "()")]
+pub enum ReturnableCausalMessageReturn<STATE> {
+    // Message that represents the return value of the "Query" message.
+    QueryReturn(STATE)
 }
 
-impl Replica {
-    pub fn start_and_receive(id: ReplicaId) -> CausalReceiver<ReplicaEventType> {
+
+/** ACTORS **/
+pub struct Replica<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static>
+    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+          STATE: Unpin,
+          CMD: Send + Unpin,
+          EVENT: Send + Clone + Unpin,
+          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
+{
+    // Init params are used for injecting parameters before the state loading.
+    init_id: ReplicaId,
+    init_crdt: C,
+    replica_state: Option<ReplicaState<C, STATE, CMD, EVENT>>,
+    replicating_nodes: VoidReplicasTable<CMD, EVENT>,
+    event_store: STORE,
+}
+
+
+/** IMPLEMENTATIONS **/
+impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Replica<C, STATE, CMD, EVENT, STORE>
+    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+          STATE: Unpin,
+          CMD: Send + Unpin,
+          EVENT: Send + Clone + Unpin,
+          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
+{
+    pub fn create(id: ReplicaId, crdt: C, store: STORE) -> Replica<C, STATE, CMD, EVENT, STORE> {
         Replica {
-            id,
+            init_id: id,
+            init_crdt: crdt,
             replica_state: None,
             replicating_nodes: HashMap::new(),
-            event_store: InMemory::create(),
-        }.start().recipient()
+            event_store: store,
+        }
     }
 
     pub fn load_state(&mut self) {
         let mut state = self.event_store
             .load_snapshot()
-            .or(Some(ReplicaState::create(self.id, Counter::default())))
+            .or(Some(ReplicaState::create(self.init_id, self.init_crdt.clone())))
             .unwrap();
 
         for event in self.event_store.load_events(state.seq_nr + 1) {
@@ -85,7 +113,7 @@ impl Replica {
         self.replica_state = Some(state);
     }
 
-    pub fn handle_command(&mut self, command: ActixCommand) {
+    pub fn handle_command(&mut self, command: CMD) {
         let state = self.replica_state
             .as_mut()
             .unwrap()
@@ -97,7 +125,7 @@ impl Replica {
     pub fn handle_connect(
         &mut self,
         replica_id: ReplicaId,
-        replica_receiver: CausalReceiver<ReplicaEventType>,
+        replica_receiver: VoidCausalRecipient<CMD, EVENT>,
     ) {
         self.replicating_nodes.insert(replica_id, replica_receiver.clone());
     }
@@ -113,7 +141,7 @@ impl Replica {
 
             replica_receiver
                 .do_send(Replicate(current_replica_id, seq_nr, version))
-                .expect(&*format!("Error while sending [REPLICATE] request from {} to {}", self.id, replica_id));
+                .expect(&*format!("Error while sending [REPLICATE] request from {} to {}", self.init_id, replica_id));
         }
     }
 
@@ -130,7 +158,7 @@ impl Replica {
 
         self.replicating_nodes
             .get(&sender)
-            .expect(&*format!("Replica {} doesn't know about replica {}", self.id, sender))
+            .expect(&*format!("Replica {} doesn't know about replica {}", self.init_id, sender))
             .do_send(Replicated(current_replica_id, last_seq_nr, events))
             .expect("Error while sending [REPLICATED] request.");
     }
@@ -139,7 +167,7 @@ impl Replica {
         &mut self,
         sender: ReplicaId,
         last_seq_nr: SeqNr,
-        events: Vec<Event<ReplicaEventType>>,
+        events: Vec<Event<EVENT>>,
     ) {
         let state = self.replica_state
             .as_mut()
@@ -153,17 +181,21 @@ impl Replica {
         }
     }
 
-    pub fn handle_query(&mut self) {
-        let crdt_state = self.replica_state
+    pub fn handle_query(&mut self) -> STATE {
+        self.replica_state
             .as_mut()
             .unwrap()
-            .process_query();
-
-        println!("Query result for replica {}: {}", self.id, crdt_state);
+            .process_query()
     }
 }
 
-impl Actor for Replica {
+impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Actor for Replica<C, STATE, CMD, EVENT, STORE>
+    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+          STATE: Unpin,
+          CMD: Send + Unpin,
+          EVENT: Send + Clone + Unpin,
+          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
+{
     type Context = Context<Self>;
 
     fn started(&mut self, _: &mut Self::Context) {
@@ -171,36 +203,56 @@ impl Actor for Replica {
     }
 }
 
-impl Handler<CausalMessage<u64>> for Replica {
+impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Handler<VoidCausalMessage<CMD, EVENT>> for Replica<C, STATE, CMD, EVENT, STORE>
+    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+          STATE: Unpin,
+          CMD: Send + Unpin,
+          EVENT: Send + Clone + Unpin,
+          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
+{
     type Result = ();
 
-    fn handle(&mut self, msg: CausalMessage<u64>, _: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: VoidCausalMessage<CMD, EVENT>, _: &mut Self::Context) -> Self::Result {
         match msg {
             Command(command) => {
-                println!("APP-[COMMAND]->@{} with command:{}", self.id, command);
+                println!("APP-[COMMAND]->@{}", self.init_id);
                 self.handle_command(command);
             }
             Connect(replica_id, replica_receiver) => {
-                println!("APP-[CONNECT]->@{} with replica_id: {}", self.id, replica_id);
+                println!("APP-[CONNECT]->@{} with replica_id: {}", self.init_id, replica_id);
                 self.handle_connect(replica_id, replica_receiver);
             }
             Sync => {
-                println!("APP-[SYNC]->@{}", self.id);
+                println!("APP-[SYNC]->@{}", self.init_id);
                 self.handle_sync();
             }
             Replicate(sender, seq_nr, version) => {
-                println!("@{}-[REPLICATE]->@{} with seq_nr:{}, version_vector:{}", sender, self.id, seq_nr, version);
+                println!("@{}-[REPLICATE]->@{} with seq_nr:{}, version_vector:{}", sender, self.init_id, seq_nr, version);
                 self.handle_replicate(sender, seq_nr, version);
             }
             Replicated(sender, last_seq_nr, events) => {
-                println!("@{}-[REPLICATED]->@{} with seq_nr:{}, n_events:{}", sender, self.id, last_seq_nr, events.len());
+                println!("@{}-[REPLICATED]->@{} with seq_nr:{}, n_events:{}", sender, self.init_id, last_seq_nr, events.len());
                 self.handle_replicated(sender, last_seq_nr, events);
-            }
-            Query => {
-                println!("APP-[QUERY]->@{}", self.id);
-                // TODO: handle return of actual value if needed (either create a new message type or just create a generic return type with STATE as result).
-                self.handle_query();
             }
         }
     }
 }
+
+// TODO: implement result type.
+// impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static> Handler<ReturnableCausalMessage> for Replica<C, STATE, CMD, EVENT>
+//     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+//           STATE: Unpin,
+//           CMD: Send + Unpin,
+//           EVENT: Send + Clone + Unpin,
+// {
+//     type Result = ResponseFuture<ReturnableCausalMessageReturn<STATE>>;
+//
+//     fn handle(&mut self, msg: ReturnableCausalMessage, ctx: &mut Self::Context) -> Self::Result {
+//         match msg {
+//             Query => {
+//                 println!("APP-[QUERY]->@{}", self.id);
+//                 Box::pin(async { QueryReturn(self.handle_query()) })
+//             }
+//         }
+//     }
+// }
