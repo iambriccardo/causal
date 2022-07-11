@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fmt::{Display};
+use std::fmt::Display;
 
 use actix::{Actor, Context, Handler, Recipient};
 use actix::prelude::*;
@@ -204,7 +204,7 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> H
                 self.handle_replicate(sender, seq_nr, version);
             }
             Replicated(sender, last_seq_nr, events) => {
-                println!("@{}-[REPLICATED]->@{} with seq_nr:{}, n_events:{}", sender, self.init_id, last_seq_nr, events.len());
+                println!("@{}-[REPLICATED]->@{} with last_seq_nr:{}, n_events:{}", sender, self.init_id, last_seq_nr, events.len());
                 self.handle_replicated(sender, last_seq_nr, events);
             }
             VoidCausalMessage::Query => {

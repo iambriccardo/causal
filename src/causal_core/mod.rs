@@ -221,7 +221,12 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
     pub fn process_replicated(
         &mut self,
         sender: ReplicaId,
-        _: SeqNr, // The last_seq_nr is not used for now because we just compute it.
+        // The last_seq_nr is not used for now because we just compute it, however it should be used as an optimization
+        // we for example we receive empty events from the server but we did actually loop over elements.
+        // E.g. I request for events from 5 and the recipient has from 5 to 10 but all of those elements have their
+        // version <= than mine, therefore they won't be sent but if they aren't sent I will not loop over them and so the observed
+        // map is not updated with 10 inside, but it remains with 5.
+        last_seq_nr: SeqNr,
         events: Vec<Event<EVENT>>,
         event_store: &mut impl EventStore<C, STATE, CMD, EVENT>,
     ) -> Option<ReplicaState<C, STATE, CMD, EVENT>> {
@@ -239,6 +244,13 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
             .into_iter()
             .filter(|event| self.unseen(event))
             .collect::<Vec<Event<EVENT>>>();
+
+        // Explanation given above.
+        if unseen_events.is_empty() {
+            self.observed.insert(sender, last_seq_nr);
+        }
+
+        println!("Unseen size {} from {}", unseen_events.len(), sender);
 
         let new_events = unseen_events
             .into_iter()
@@ -278,32 +290,39 @@ impl<C, STATE, CMD, EVENT> ReplicaState<C, STATE, CMD, EVENT>
         return new_state;
     }
 
+    // Supposing we have three replicas 1,2,3 with this initial state (replica 2 pulled from 1):
+    // replica_id -> local_seq_nr-event [vector_clock] [observed]
+    // 1 -> 1-A [1,0,0] []
+    // 2 -> 1-A [1,0,0] [1:1]
+    // 3 -> empty
+    // Suppose now 3 sends a [REPLICATE] request concurrently to both 1 and 2 (containing the vector clock [0,0,0]) and the answer from 2 is applied first:
+    // 1 -> 1-A [1,0,0] []
+    // 2 -> 1-A [1,0,0] [1:1]
+    // 3 -> 1-A [1,0,0] [2:1]
+    // Then answer from 1 is received and unseen() call sees that we observed 0 from 1 and we received an event with seq nr 1, therefore
+    // we apply this event resulting in:
+    // 1 -> 1-A [1,0,0] []
+    // 2 -> 1-A [1,0,0] [1:1]
+    // 3 -> 1-A [1,0,0] 2-A [1,0,0] [2:1,1:1] **DUPLICATE EVENT**
+    //
+    // A solution might be to add to the observed also the origin but it needs further testing.
+    // let origin_observed = self.observed.get(&event.origin).or(Some(&0)).unwrap();
+    // self.observed.insert(event.origin, cmp::max(*origin_observed, event.origin_seq_nr));
+    //
+    // pub fn unseen(&self, event: &Event<EVENT>) -> bool {
+    //     match self.observed.get(&event.origin) {
+    //         Some(observed_seq_nr) if event.origin_seq_nr > *observed_seq_nr => true,
+    //         _ => {
+    //             let comparison = event.version.compare(&self.version);
+    //             comparison == Greater || comparison == Concurrent
+    //         }
+    //     }
+    // }
+
+    // This variant just uses vector clocks for comparison, which is enough.
     pub fn unseen(&self, event: &Event<EVENT>) -> bool {
-        // TODO: suspicious implementation which doesn't work well in concurrent cases.
-        //
-        // Supposing we have three replicas 1,2,3 with this initial state (replica 2 pulled from 1):
-        // replica_id -> local_seq_nr-event [vector_clock] [observed]
-        // 1 -> 1-A [1,0,0] []
-        // 2 -> 1-A [1,0,0] [1:1]
-        // 3 -> empty
-        // Suppose now 3 sends a [REPLICATE] request concurrently to both 1 and 2 (containing the vector clock [0,0,0]) and the answer from 2 is applied first:
-        // 1 -> 1-A [1,0,0] []
-        // 2 -> 1-A [1,0,0] [1:1]
-        // 3 -> 1-A [1,0,0] [2:1]
-        // Then answer from 1 is received and unseen() call sees that we observed 0 from 1 and we received an event with seq nr 1, therefore
-        // we apply this event resulting in:
-        // 1 -> 1-A [1,0,0] []
-        // 2 -> 1-A [1,0,0] [1:1]
-        // 3 -> 1-A [1,0,0] 2-A [1,0,0] [2:1,1:1] **DUPLICATE EVENT**
-        //
-        // A possible solution would be to check only the vector clock of the element but this would need further testing.
-        match self.observed.get(&event.origin) {
-            Some(observed_seq_nr) if event.origin_seq_nr > *observed_seq_nr => true,
-            _ => {
-                let comparison = event.version.compare(&self.version);
-                comparison == Greater || comparison == Concurrent
-            }
-        }
+        let comparison = event.version.compare(&self.version);
+        comparison == Greater || comparison == Concurrent
     }
 
     pub fn process_query(&self) -> STATE {

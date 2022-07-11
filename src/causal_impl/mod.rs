@@ -1,6 +1,8 @@
+use std::collections::HashSet;
+
 use crate::{CRDT, Event, EventStore, ReplicaState};
 use crate::causal_actix::ActixCommand;
-use crate::causal_core::SeqNr;
+use crate::causal_core::{SeqNr, VTime};
 
 pub struct Counter {
     value: u64,
@@ -77,3 +79,33 @@ impl EventStore<Counter, u64, ActixCommand, u64> for InMemory {
             .collect()
     }
 }
+
+// pub enum SetCommand {
+//
+// }
+//
+// pub enum SetOperation {
+//
+// }
+//
+// pub struct ORSet<T> {
+//     elements: HashSet<(T, VTime)>
+// }
+//
+// impl <T> CRDT<Set<T>, SetCommand, SetOperation> for ORSet<T> {
+//     fn default() -> Self {
+//         todo!()
+//     }
+//
+//     fn query(&self) -> Set<T> {
+//         todo!()
+//     }
+//
+//     fn prepare(&self, command: &SetCommand) -> SetOperation {
+//         todo!()
+//     }
+//
+//     fn effect(&mut self, event: &Event<SetOperation>) {
+//         todo!()
+//     }
+// }

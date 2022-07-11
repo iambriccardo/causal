@@ -101,9 +101,11 @@ impl<T: Display + Eq + Hash + Copy> Display for VectorClock<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut output = String::from("");
 
+        output.push_str("[");
         for (replica_id, clock) in &self.vector {
-            output.push_str(&format!("[r:{}, s:{}] ", replica_id, clock));
+            output.push_str(&format!("(r:{},s:{})", replica_id, clock));
         }
+        output.push_str("]");
 
         write!(f, "{}", output)
     }

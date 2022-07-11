@@ -41,11 +41,10 @@ fn connect<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
 }
 
 // TODO:
-// * Verify whether concurrent replicate requests are good or not for the system (consider the unseen() method).
 // * Try a socket based implementation.
 // * Implement more complex operation-based CRDTs.
 fn main() {
-    let replicas_number: usize = 2;
+    let replicas_number: usize = 3;
     let system = System::new();
     let mut replicas = HashMap::new();
 
@@ -62,13 +61,17 @@ fn main() {
         }
     });
 
-    // We connect both replicas.
-    connect(&replicas, 1, 0);
-    connect(&replicas, 0, 1);
+    for i in 0..replicas_number {
+        for j in (0..replicas_number).rev() {
+            if i != j {
+                connect(&replicas, i, j);
+            }
+        }
+    }
 
     thread::spawn(move || {
         loop {
-            println!("Choose an operation ([INC:ID],[QUERY:ID],[SYNC:ID])");
+            println!("Choose an operation ([I:ID],[Q:ID],[S:ID])");
 
             let mut command = String::new();
             io::stdin()
@@ -87,17 +90,17 @@ fn main() {
             };
 
             match action {
-                "INC" => {
+                "I" => {
                     send_void(&replicas, replica_id as ReplicaId, Command(Increment));
                 }
-                "QUERY" => {
+                "Q" => {
                     send_void(&replicas, replica_id as ReplicaId, Query);
                 }
-                "SYNC" => {
+                "S" => {
                     send_void(&replicas, replica_id as ReplicaId, Sync);
                 }
                 &_ => {
-                    break;
+                    println!("The command is not understood, try again.")
                 }
             };
         }
