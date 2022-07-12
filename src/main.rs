@@ -4,9 +4,8 @@ use std::collections::HashMap;
 use actix::{Actor, System};
 
 use crate::causal_actix::{Replica, VoidCausalMessage, VoidCausalRecipient};
-use crate::causal_actix::ActixCommand::Increment;
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
-use crate::causal_impl::{Counter, InMemory};
+use crate::causal_or_set::{InMemory, ORSet, SetCommand};
 use crate::causal_time::ClockComparison::{Concurrent, Greater};
 use crate::causal_time::VectorClock;
 use crate::VoidCausalMessage::{Command, Connect, Query, Sync};
@@ -14,7 +13,7 @@ use crate::VoidCausalMessage::{Command, Connect, Query, Sync};
 mod causal_time;
 mod causal_core;
 mod causal_actix;
-mod causal_impl;
+mod causal_or_set;
 
 fn send_void<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
     replicas: &HashMap<ReplicaId, VoidCausalRecipient<CMD, EVENT>>,
@@ -54,7 +53,7 @@ fn main() {
             // For each replica we will craft specific messages that will trigger actions towards the CRDT.
             let replica = Replica::create(
                 id,
-                Counter::default(),
+                ORSet::<u64>::default(),
                 InMemory::create(),
             );
             replicas.insert(id, replica.start().recipient());
@@ -69,9 +68,10 @@ fn main() {
         }
     }
 
+    // This simple application is just for demonstration purposes. It is not meant to be used.
     thread::spawn(move || {
         loop {
-            println!("Choose an operation ([I:ID],[Q:ID],[S:ID])");
+            println!("Choose an operation ([A;VAL:ID],[R;VAL:ID],[I:ID],[Q:ID],[S:ID])");
 
             let mut command = String::new();
             io::stdin()
@@ -90,9 +90,6 @@ fn main() {
             };
 
             match action {
-                "I" => {
-                    send_void(&replicas, replica_id as ReplicaId, Command(Increment));
-                }
                 "Q" => {
                     send_void(&replicas, replica_id as ReplicaId, Query);
                 }
@@ -100,7 +97,26 @@ fn main() {
                     send_void(&replicas, replica_id as ReplicaId, Sync);
                 }
                 &_ => {
-                    println!("The command is not understood, try again.")
+                    if action.contains("A") || action.contains("R") {
+                        let command_parts: Vec<&str> = action.split(";").collect();
+                        let action: &str = command_parts.get(0).unwrap();
+                        let value: &str = command_parts.get(1).unwrap();
+                        let value: u64 = match value.trim().parse() {
+                            Ok(value) => value,
+                            Err(err) => {
+                                println!("{}", err);
+                                0
+                            }
+                        };
+
+                        match action {
+                            "A" => send_void(&replicas, replica_id as ReplicaId, Command(SetCommand::Add(value))),
+                            "R" => send_void(&replicas, replica_id as ReplicaId, Command(SetCommand::Remove(value))),
+                            &_ => println!("The command is not parsable.")
+                        }
+                    } else {
+                        println!("The command is not parsable.")
+                    }
                 }
             };
         }

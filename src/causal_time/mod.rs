@@ -2,7 +2,7 @@ use std::cmp::max;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::vec::IntoIter;
 
 use itertools::Itertools;
@@ -91,6 +91,8 @@ impl<T: Display + Eq + Hash + Copy> Clone for VectorClock<T> {
     }
 }
 
+impl<T: Display + Eq + Hash + Copy> Eq for VectorClock<T> {}
+
 impl<T: Display + Eq + Hash + Copy> PartialEq<Self> for VectorClock<T> {
     fn eq(&self, other: &Self) -> bool {
         self.compare(other) == Equal
@@ -108,6 +110,15 @@ impl<T: Display + Eq + Hash + Copy> Display for VectorClock<T> {
         output.push_str("]");
 
         write!(f, "{}", output)
+    }
+}
+
+impl<T: Display + Eq + Hash + Copy> Hash for VectorClock<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for (replica, clock) in &self.vector {
+            replica.hash(state);
+            clock.hash(state);
+        }
     }
 }
 

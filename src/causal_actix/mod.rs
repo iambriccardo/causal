@@ -11,10 +11,6 @@ use crate::VoidCausalMessage::{Command, Connect, Replicate, Replicated, Sync};
 pub type VoidReplicasTable<CMD, EVENT> = HashMap<ReplicaId, Recipient<VoidCausalMessage<CMD, EVENT>>>;
 pub type VoidCausalRecipient<CMD, EVENT> = Recipient<VoidCausalMessage<CMD, EVENT>>;
 
-pub enum ActixCommand {
-    Increment
-}
-
 
 /** MESSAGES **/
 #[derive(Message)]
