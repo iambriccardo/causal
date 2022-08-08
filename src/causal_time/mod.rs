@@ -127,8 +127,8 @@ mod tests {
     use std::collections::HashMap;
     use std::f32::consts::E;
 
-    use crate::{Greater, VectorClock};
-    use crate::vector_clocks::ClockComparison::{Concurrent, Equal, Greater, Less};
+    use crate::{Concurrent, Greater, VectorClock};
+    use crate::causal_time::ClockComparison::{Equal, Less};
 
     #[test]
     fn increment() {

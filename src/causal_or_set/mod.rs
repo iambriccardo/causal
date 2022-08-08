@@ -5,25 +5,7 @@ use std::hash::Hash;
 use crate::{CRDT, Event, EventStore, ReplicaState};
 use crate::causal_core::{SeqNr, VTime};
 use crate::causal_or_set::SetOperation::{Added, Removed};
-
-pub struct InMemory<C, STATE, CMD, EVENT>
-    where C: CRDT<STATE, CMD, EVENT> + Clone,
-          EVENT: Clone {
-    last_snapshot: Option<ReplicaState<C, STATE, CMD, EVENT>>,
-    events: Vec<Event<EVENT>>,
-}
-
-impl<C, STATE, CMD, EVENT> InMemory<C, STATE, CMD, EVENT>
-    where C: CRDT<STATE, CMD, EVENT> + Clone,
-          EVENT: Clone
-{
-    pub fn create() -> InMemory<C, STATE, CMD, EVENT> {
-        InMemory {
-            last_snapshot: None,
-            events: vec![],
-        }
-    }
-}
+use crate::causal_utils::InMemory;
 
 pub enum SetCommand<T>
     where T: Clone + Eq + PartialEq + Hash + Display

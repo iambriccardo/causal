@@ -5,15 +5,19 @@ use actix::{Actor, System};
 
 use crate::causal_actix::{Replica, VoidCausalMessage, VoidCausalRecipient};
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
-use crate::causal_or_set::{InMemory, ORSet, SetCommand};
+use crate::causal_or_set::{ORSet, SetCommand};
 use crate::causal_time::ClockComparison::{Concurrent, Greater};
 use crate::causal_time::VectorClock;
+use crate::causal_utils::InMemory;
 use crate::VoidCausalMessage::{Command, Connect, Query, Sync};
 
 mod causal_time;
 mod causal_core;
 mod causal_actix;
 mod causal_or_set;
+mod causal_console;
+mod causal_utils;
+mod causal_lseq;
 
 fn send_void<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
     replicas: &HashMap<ReplicaId, VoidCausalRecipient<CMD, EVENT>>,
