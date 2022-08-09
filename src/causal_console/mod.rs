@@ -1,14 +1,99 @@
-// Create a text area interface with all the methods of a terminal text area.
-//
-// When the text area is initiated a string is passed which will be manipulated based on key presses.
-// The string will default to the content "|" where | is the cursor representation.
-//
-// For character removed or inserted an event is generated which is dispatched through a trait which will
-// be implemented by a certain element.
-//
-// The whole text area will loop and clear the terminal screen for each printing and it will end with a given
-// key combination.
-//
-// Useful libraries:
-// https://crates.io/crates/console
-// https://lib.rs/crates/clearscreen
+use std::io::Write;
+use std::thread::sleep;
+use std::time::Duration;
+use console::{Key, Term};
+
+pub trait InputReceiver {
+
+    fn insert_at(&self, position: usize, character: char);
+
+    fn remove_at(&self, position: usize);
+
+    fn on_enter(&self);
+}
+
+pub struct InputField {
+    cursor_position: usize,
+    value: String
+}
+
+impl InputField {
+
+    pub fn start(string: String, receiver: &impl InputReceiver) -> InputField {
+        let mut input_field = InputField {
+            cursor_position: 0,
+            value: string,
+        };
+        input_field.render(receiver);
+
+        input_field
+    }
+
+    fn render(&mut self, receiver: &impl InputReceiver) {
+        let term = Term::stdout();
+        term.hide_cursor().unwrap();
+
+        self.render_value(&term);
+
+        loop {
+            if let Ok(key) = term.read_key() {
+                match key {
+                    Key::ArrowLeft => {
+                        self.cursor_backward(&term);
+                    }
+                    Key::ArrowRight => {
+                        self.cursor_forward(&term);
+                    },
+                    Key::Char(character) => {
+                        receiver.insert_at(self.cursor_position, character);
+                        self.insert(&term, character);
+                    },
+                    Key::Backspace => {
+                        receiver.remove_at(self.cursor_position);
+                        self.remove(&term);
+                    }
+                    Key::Enter => {
+                        receiver.on_enter();
+                        break;
+                    }
+                    _ => { }
+                }
+             }
+        }
+    }
+
+    fn render_value(&self, term: &Term) {
+        term.clear_screen().unwrap();
+        let mut value = &mut self.value.clone();
+        value.insert(self.cursor_position, '|');
+        term.write_line(value).unwrap();
+    }
+
+    fn cursor_backward(&mut self, term: &Term) {
+        if self.cursor_position > 0 {
+            self.cursor_position -= 1;
+            self.render_value(&term);
+        }
+    }
+
+    fn cursor_forward(&mut self, term: &Term) {
+        if self.cursor_position < self.value.len() {
+            self.cursor_position += 1;
+            self.render_value(&term);
+        }
+    }
+
+    fn insert(&mut self, term: &Term, character: char) {
+        self.value.insert(self.cursor_position, character);
+        self.cursor_position += 1;
+        self.render_value(&term);
+    }
+
+    fn remove(&mut self, term: &Term) {
+        if self.cursor_position > 0 {
+            self.value.remove(self.cursor_position - 1);
+            self.cursor_position -= 1;
+            self.render_value(&term);
+        }
+    }
+}

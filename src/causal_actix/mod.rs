@@ -107,8 +107,8 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> R
                 .process_sync(replica_id.clone());
 
             replica_receiver
-                .do_send(Replicate(current_replica_id, seq_nr, version))
-                .expect(&*format!("Error while sending [REPLICATE] request from {} to {}", self.init_id, replica_id));
+                .do_send(Replicate(current_replica_id, seq_nr, version));
+                // .expect(&*format!("Error while sending [REPLICATE] request from {} to {}", self.init_id, replica_id));
         }
     }
 
@@ -126,8 +126,8 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> R
         self.replicating_nodes
             .get(&sender)
             .expect(&*format!("Replica {} doesn't know about replica {}", self.init_id, sender))
-            .do_send(Replicated(current_replica_id, last_seq_nr, events))
-            .expect("Error while sending [REPLICATED] request.");
+            .do_send(Replicated(current_replica_id, last_seq_nr, events));
+            // .expect("Error while sending [REPLICATED] request.");
     }
 
     pub fn handle_replicated(

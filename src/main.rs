@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use actix::{Actor, System};
 
 use crate::causal_actix::{Replica, VoidCausalMessage, VoidCausalRecipient};
+use crate::causal_console::{InputField, InputReceiver};
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
+use crate::causal_lseq::LSeqCommand;
 use crate::causal_or_set::{ORSet, SetCommand};
 use crate::causal_time::ClockComparison::{Concurrent, Greater};
 use crate::causal_time::VectorClock;
@@ -27,8 +29,8 @@ fn send_void<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
     replicas
         .get(&replica_id)
         .unwrap()
-        .do_send(message)
-        .expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
+        .do_send(message);
+        //.expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
 }
 
 fn connect<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
@@ -43,10 +45,7 @@ fn connect<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
     );
 }
 
-// TODO:
-// * Try a socket based implementation.
-// * Implement more complex operation-based CRDTs.
-fn main() {
+fn start() {
     let replicas_number: usize = 3;
     let system = System::new();
     let mut replicas = HashMap::new();
@@ -128,3 +127,40 @@ fn main() {
 
     system.run().unwrap();
 }
+
+struct LSeqReceiver {
+    commands: Vec<LSeqCommand<char>>
+}
+
+impl LSeqReceiver {
+
+    fn new() -> LSeqReceiver {
+        LSeqReceiver {
+            commands: vec![]
+        }
+    }
+}
+
+impl InputReceiver for LSeqReceiver {
+    fn insert_at(&self, position: usize, character: char) {
+        println!("Inserting {} at {}", character, position);
+    }
+
+    fn remove_at(&self, position: usize) {
+        println!("Removing character at {}", position);
+    }
+
+    fn on_enter(&self) {
+        println!("ENTER")
+    }
+}
+
+// TODO:
+// * Try a socket based implementation.
+// * Implement more complex operation-based CRDTs.
+fn main() {
+    let string = String::from("");
+    let receiver = LSeqReceiver::new();
+    InputField::start(string, &receiver);
+}
+
