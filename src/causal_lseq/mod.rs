@@ -184,22 +184,28 @@ impl<T> EventStore<LSeq<T>, Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for InMemo
     where T: Clone
 {
     fn save_snapshot(&mut self, state: &ReplicaState<LSeq<T>, Vec<T>, LSeqCommand<T>, LSeqOperation<T>>) {
-        println!("SAVING SNAPSHOT");
+        self.last_snapshot = Some(state.clone())
     }
 
     fn load_snapshot(&self) -> Option<ReplicaState<LSeq<T>, Vec<T>, LSeqCommand<T>, LSeqOperation<T>>> {
-        println!("LOADING SNAPSHOT");
-        None
+        match &self.last_snapshot {
+            Some(last_snapshot) => Some(last_snapshot.clone()),
+            _ => None
+        }
     }
 
     fn save_events(&mut self, events: Vec<Event<LSeqOperation<T>>>) {
-        println!("SAVING EVENTS");
+        events.iter().for_each(|event| self.events.push(event.clone()));
     }
 
     fn load_events(&self, start_seq_nr: SeqNr) -> Vec<Event<LSeqOperation<T>>> {
-        println!("LOADING EVENTS");
-
-        vec![]
+        self.events
+            .clone()
+            .into_iter()
+            .filter(|event| {
+                event.local_seq_nr >= start_seq_nr
+            })
+            .collect()
     }
 }
 
