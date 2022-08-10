@@ -36,7 +36,7 @@ pub enum VoidCausalMessage<CMD, EVENT>
 /** ACTORS **/
 pub struct Replica<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Display + Unpin,
+          STATE: Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
@@ -53,7 +53,7 @@ pub struct Replica<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STO
 /** IMPLEMENTATIONS **/
 impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Replica<C, STATE, CMD, EVENT, STORE>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Display + Unpin,
+          STATE: Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
@@ -154,13 +154,13 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> R
             .unwrap()
             .process_query();
 
-        println!("STATE@{} = {}", self.init_id, state)
+        println!("DATA QUERIED");
     }
 }
 
 impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Actor for Replica<C, STATE, CMD, EVENT, STORE>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Display + Unpin,
+          STATE: Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
@@ -174,7 +174,7 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> A
 
 impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Handler<VoidCausalMessage<CMD, EVENT>> for Replica<C, STATE, CMD, EVENT, STORE>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Display + Unpin,
+          STATE: Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin

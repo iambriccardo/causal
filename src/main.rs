@@ -6,11 +6,12 @@ use actix::{Actor, System};
 use crate::causal_actix::{Replica, VoidCausalMessage, VoidCausalRecipient};
 use crate::causal_console::{InputField, InputReceiver};
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
-use crate::causal_lseq::LSeqCommand;
+use crate::causal_lseq::{LSeq, LSeqCommand, LSeqOperation};
 use crate::causal_or_set::{ORSet, SetCommand};
 use crate::causal_time::ClockComparison::{Concurrent, Greater};
 use crate::causal_time::VectorClock;
 use crate::causal_utils::InMemory;
+use crate::LSeqCommand::{Insert, Remove};
 use crate::VoidCausalMessage::{Command, Connect, Query, Sync};
 
 mod causal_time;
@@ -56,8 +57,8 @@ fn start() {
             // For each replica we will craft specific messages that will trigger actions towards the CRDT.
             let replica = Replica::create(
                 id,
-                ORSet::<u64>::default(),
-                InMemory::create(),
+                LSeq::<char>::default(),
+                InMemory::<LSeq<char>, Vec<char>, LSeqCommand<char>, LSeqOperation<char>>::create(),
             );
             replicas.insert(id, replica.start().recipient());
         }
@@ -74,7 +75,7 @@ fn start() {
     // This simple application is just for demonstration purposes. It is not meant to be used.
     thread::spawn(move || {
         loop {
-            println!("Choose an operation ([A;VAL:ID],[R;VAL:ID],[I:ID],[Q:ID],[S:ID])");
+            println!("Choose an operation ([E:ID],[Q:ID],[S:ID])");
 
             let mut command = String::new();
             io::stdin()
@@ -84,7 +85,7 @@ fn start() {
             let command_parts: Vec<&str> = command.split(":").collect();
             let action: &str = command_parts.get(0).unwrap();
             let replica_id: &str = command_parts.get(1).unwrap();
-            let replica_id: u32 = match replica_id.trim().parse() {
+            let replica_id: usize = match replica_id.trim().parse() {
                 Ok(value) => value,
                 Err(err) => {
                     println!("{}", err);
@@ -94,33 +95,21 @@ fn start() {
 
             match action {
                 "Q" => {
-                    send_void(&replicas, replica_id as ReplicaId, Query);
+                    send_void(&replicas, replica_id, Query);
                 }
                 "S" => {
-                    send_void(&replicas, replica_id as ReplicaId, Sync);
+                    send_void(&replicas, replica_id, Sync);
                 }
-                &_ => {
-                    if action.contains("A") || action.contains("R") {
-                        let command_parts: Vec<&str> = action.split(";").collect();
-                        let action: &str = command_parts.get(0).unwrap();
-                        let value: &str = command_parts.get(1).unwrap();
-                        let value: u64 = match value.trim().parse() {
-                            Ok(value) => value,
-                            Err(err) => {
-                                println!("{}", err);
-                                0
-                            }
-                        };
+                "E" => {
+                    let mut receiver = LSeqReceiver::new(replica_id);
+                    InputField::start(String::from(""), &mut receiver);
+                    // receiver.commands = vec![Insert(0, replica_id, 'C'), Insert(0, replica_id, 'I')];
 
-                        match action {
-                            "A" => send_void(&replicas, replica_id as ReplicaId, Command(SetCommand::Add(value))),
-                            "R" => send_void(&replicas, replica_id as ReplicaId, Command(SetCommand::Remove(value))),
-                            &_ => println!("The command is not parsable.")
-                        }
-                    } else {
-                        println!("The command is not parsable.")
+                    for command in receiver.commands {
+                        send_void(&replicas, replica_id, Command(command));
                     }
                 }
+                &_ => println!("The command is not parsable")
             };
         }
     });
@@ -129,29 +118,27 @@ fn start() {
 }
 
 struct LSeqReceiver {
+    replica_id: ReplicaId,
     commands: Vec<LSeqCommand<char>>
 }
 
 impl LSeqReceiver {
 
-    fn new() -> LSeqReceiver {
+    fn new(replica_id: ReplicaId) -> LSeqReceiver {
         LSeqReceiver {
+            replica_id,
             commands: vec![]
         }
     }
 }
 
 impl InputReceiver for LSeqReceiver {
-    fn insert_at(&self, position: usize, character: char) {
-        println!("Inserting {} at {}", character, position);
+    fn insert_at(&mut self, position: usize, character: char) {
+        self.commands.push(Insert(position, self.replica_id, character));
     }
 
-    fn remove_at(&self, position: usize) {
-        println!("Removing character at {}", position);
-    }
-
-    fn on_enter(&self) {
-        println!("ENTER")
+    fn remove_at(&mut self, position: usize) {
+        self.commands.push(Remove(position))
     }
 }
 
@@ -159,8 +146,6 @@ impl InputReceiver for LSeqReceiver {
 // * Try a socket based implementation.
 // * Implement more complex operation-based CRDTs.
 fn main() {
-    let string = String::from("");
-    let receiver = LSeqReceiver::new();
-    InputField::start(string, &receiver);
+    start();
 }
 

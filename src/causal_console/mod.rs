@@ -5,11 +5,9 @@ use console::{Key, Term};
 
 pub trait InputReceiver {
 
-    fn insert_at(&self, position: usize, character: char);
+    fn insert_at(&mut self, position: usize, character: char);
 
-    fn remove_at(&self, position: usize);
-
-    fn on_enter(&self);
+    fn remove_at(&mut self, position: usize);
 }
 
 pub struct InputField {
@@ -19,7 +17,7 @@ pub struct InputField {
 
 impl InputField {
 
-    pub fn start(string: String, receiver: &impl InputReceiver) -> InputField {
+    pub fn start(string: String, receiver: &mut impl InputReceiver) -> InputField {
         let mut input_field = InputField {
             cursor_position: 0,
             value: string,
@@ -29,7 +27,7 @@ impl InputField {
         input_field
     }
 
-    fn render(&mut self, receiver: &impl InputReceiver) {
+    fn render(&mut self, receiver: &mut impl InputReceiver) {
         let term = Term::stdout();
         term.hide_cursor().unwrap();
 
@@ -53,13 +51,15 @@ impl InputField {
                         self.remove(&term);
                     }
                     Key::Enter => {
-                        receiver.on_enter();
                         break;
                     }
                     _ => { }
                 }
              }
         }
+
+        term.clear_screen().unwrap();
+        term.show_cursor().unwrap();
     }
 
     fn render_value(&self, term: &Term) {

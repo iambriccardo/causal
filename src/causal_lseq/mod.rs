@@ -2,7 +2,8 @@ use std::cmp;
 use std::cmp::Ordering;
 use std::cmp::Ordering::{Greater, Less};
 
-use crate::{CRDT, Event, ReplicaId};
+use crate::{CRDT, Event, EventStore, InMemory, ReplicaId, ReplicaState};
+use crate::causal_core::SeqNr;
 use crate::causal_lseq::LSeqCommand::{Insert, Remove};
 use crate::causal_lseq::LSeqOperation::{Inserted, Removed};
 
@@ -96,7 +97,7 @@ pub enum LSeqCommand<T>
     where T: Clone
 {
     Insert(usize, ReplicaId, T),
-    Remove(usize, ReplicaId),
+    Remove(usize),
 }
 
 #[derive(Clone)]
@@ -111,6 +112,16 @@ pub struct LSeq<T>
     where T: Clone
 {
     elements: Vec<(VPtr, T)>,
+}
+
+impl<T> Clone for LSeq<T>
+    where T: Clone
+{
+    fn clone(&self) -> Self {
+        LSeq {
+            elements: self.elements.iter().cloned().collect()
+        }
+    }
 }
 
 impl<T> CRDT<Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for LSeq<T>
@@ -140,7 +151,7 @@ impl<T> CRDT<Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for LSeq<T>
 
                 Inserted(VPtr::from(replica_id.clone(), &left, &right), value.clone())
             }
-            Remove(index, _) => {
+            Remove(index) => {
                 Removed(self.elements[*index].0.clone())
             }
         }
@@ -152,7 +163,8 @@ impl<T> CRDT<Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for LSeq<T>
                 let index = self.elements
                     .iter()
                     .position(|(v_ptr, _)| ins_v_ptr <= v_ptr)
-                    .expect("Couldn't find position to insert new character.");
+                    .or(Some(0))
+                    .unwrap();
 
                 self.elements.insert(index, (ins_v_ptr.clone(), value.clone()));
             }
@@ -168,6 +180,29 @@ impl<T> CRDT<Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for LSeq<T>
     }
 }
 
+impl<T> EventStore<LSeq<T>, Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for InMemory<LSeq<T>, Vec<T>, LSeqCommand<T>, LSeqOperation<T>>
+    where T: Clone
+{
+    fn save_snapshot(&mut self, state: &ReplicaState<LSeq<T>, Vec<T>, LSeqCommand<T>, LSeqOperation<T>>) {
+        println!("SAVING SNAPSHOT");
+    }
+
+    fn load_snapshot(&self) -> Option<ReplicaState<LSeq<T>, Vec<T>, LSeqCommand<T>, LSeqOperation<T>>> {
+        println!("LOADING SNAPSHOT");
+        None
+    }
+
+    fn save_events(&mut self, events: Vec<Event<LSeqOperation<T>>>) {
+        println!("SAVING EVENTS");
+    }
+
+    fn load_events(&self, start_seq_nr: SeqNr) -> Vec<Event<LSeqOperation<T>>> {
+        println!("LOADING EVENTS");
+
+        vec![]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::causal_lseq::{Sequence, VPtr};
@@ -178,7 +213,7 @@ mod tests {
         let high = VPtr::new(1);
 
         let expected_sequence: Sequence = vec![1];
-        let sequence = VPtr::generate_seq(&low, &high);
+        let sequence = VPtr::generate_seq(&low.sequence, &high.sequence);
 
         assert_eq!(expected_sequence, sequence);
     }
@@ -190,7 +225,7 @@ mod tests {
         high.sequence = vec![1];
 
         let expected_sequence: Sequence = vec![0, 1];
-        let sequence = VPtr::generate_seq(&low, &high);
+        let sequence = VPtr::generate_seq(&low.sequence, &high.sequence);
 
         assert_eq!(expected_sequence, sequence);
     }
@@ -202,7 +237,7 @@ mod tests {
         let high = VPtr::new(1);
 
         let expected_sequence: Sequence = vec![2];
-        let sequence = VPtr::generate_seq(&low, &high);
+        let sequence = VPtr::generate_seq(&low.sequence, &high.sequence);
 
         assert_eq!(expected_sequence, sequence);
     }
@@ -215,7 +250,7 @@ mod tests {
         high.sequence = vec![2];
 
         let expected_sequence: Sequence = vec![1, 1];
-        let sequence = VPtr::generate_seq(&low, &high);
+        let sequence = VPtr::generate_seq(&low.sequence, &high.sequence);
 
         assert_eq!(expected_sequence, sequence);
     }
