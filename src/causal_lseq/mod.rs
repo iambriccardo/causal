@@ -15,13 +15,6 @@ pub struct VPtr {
 }
 
 impl VPtr {
-    fn new(replica_id: ReplicaId) -> VPtr {
-        VPtr {
-            sequence: vec![],
-            replica_id,
-        }
-    }
-
     fn from(replica_id: ReplicaId, low: &Sequence, high: &Sequence) -> VPtr {
         VPtr {
             sequence: VPtr::generate_seq(low, high),
@@ -42,7 +35,6 @@ impl VPtr {
                 generate(mid, low, high, i + 1)
             }
         }
-        ;
 
         generate(vec![], low, high, 0)
     }
@@ -137,7 +129,7 @@ impl<T> CRDT<Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for LSeq<T>
         self.elements
             .iter()
             .cloned()
-            .map(|(v_ptr, value)| value)
+            .map(|(_, value)| value)
             .collect()
     }
 
@@ -148,6 +140,8 @@ impl<T> CRDT<Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for LSeq<T>
 
                 let left = if *index == 0 { &empty_v_ptr } else { &self.elements[*index - 1].0.sequence };
                 let right = if *index >= self.elements.len() { &empty_v_ptr } else { &self.elements[*index].0.sequence };
+
+                println!("Inserting at pos {}", index);
 
                 Inserted(VPtr::from(replica_id.clone(), &left, &right), value.clone())
             }
@@ -163,7 +157,7 @@ impl<T> CRDT<Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for LSeq<T>
                 let index = self.elements
                     .iter()
                     .position(|(v_ptr, _)| ins_v_ptr <= v_ptr)
-                    .or(Some(0))
+                    .or(Some(self.elements.len()))
                     .unwrap();
 
                 self.elements.insert(index, (ins_v_ptr.clone(), value.clone()));

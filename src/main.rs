@@ -1,18 +1,17 @@
 use std::{io, thread};
 use std::collections::HashMap;
 
-use actix::{Actor, Addr, System};
+use actix::prelude::*;
 
-use crate::causal_actix::{Replica, VoidCausalMessage, VoidCausalRecipient};
+use crate::causal_actix::{Replica, ValuedCausalMessage, VoidCausalMessage};
 use crate::causal_console::{InputField, InputReceiver};
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
 use crate::causal_lseq::{LSeq, LSeqCommand, LSeqOperation};
-use crate::causal_or_set::{ORSet, SetCommand};
 use crate::causal_time::ClockComparison::{Concurrent, Greater};
 use crate::causal_time::VectorClock;
 use crate::causal_utils::InMemory;
 use crate::LSeqCommand::{Insert, Remove};
-use crate::VoidCausalMessage::{Command, Connect, Query, Sync};
+use crate::VoidCausalMessage::{Command, Connect, Sync};
 
 mod causal_time;
 mod causal_core;
@@ -28,7 +27,7 @@ fn send_void<C, STATE, CMD, EVENT, STORE>(
     message: VoidCausalMessage<CMD, EVENT>,
 )
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Unpin,
+          STATE: Send + Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
@@ -40,6 +39,27 @@ fn send_void<C, STATE, CMD, EVENT, STORE>(
         .recipient()
         .do_send(message);
     //.expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
+}
+
+async fn send_valued<C, STATE, CMD, EVENT, STORE>(
+    replicas: &HashMap<ReplicaId, Addr<Replica<C, STATE, CMD, EVENT, STORE>>>,
+    replica_id: ReplicaId,
+    message: ValuedCausalMessage<STATE>,
+) -> STATE
+    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+          STATE: Send + Unpin,
+          CMD: Send + Unpin,
+          EVENT: Send + Clone + Unpin,
+          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
+{
+    replicas
+        .get(&replica_id)
+        .unwrap()
+        .clone()
+        .send(message)
+        .await
+        .unwrap()
+        .0
 }
 
 fn start() {
@@ -80,44 +100,65 @@ fn start() {
 
     // This simple application is just for demonstration purposes. It is not meant to be used.
     thread::spawn(move || {
-        loop {
-            println!("Choose an operation ([E:ID],[Q:ID],[S:ID])");
+        let _ = System::new();
+        let arbiter = Arbiter::new();
 
-            let mut command = String::new();
-            io::stdin()
-                .read_line(&mut command)
-                .expect("Failed to read from CLI");
+        arbiter.spawn(async move {
+            loop {
+                println!("Choose an operation ([E:ID],[Q:ID],[S:ID])");
 
-            let command_parts: Vec<&str> = command.split(":").collect();
-            let action: &str = command_parts.get(0).unwrap();
-            let replica_id: &str = command_parts.get(1).unwrap();
-            let replica_id: usize = match replica_id.trim().parse() {
-                Ok(value) => value,
-                Err(err) => {
-                    println!("{}", err);
-                    0
-                }
-            };
+                let mut command = String::new();
+                io::stdin()
+                    .read_line(&mut command)
+                    .expect("Failed to read from CLI");
 
-            match action {
-                "Q" => {
-                    send_void(&replicas, replica_id, Query);
-                }
-                "S" => {
-                    send_void(&replicas, replica_id, Sync);
-                }
-                "E" => {
-                    let mut receiver = LSeqReceiver::new(replica_id);
-                    InputField::start(String::from(""), &mut receiver);
-                    // receiver.commands = vec![Insert(0, replica_id, 'C'), Insert(0, replica_id, 'I')];
-
-                    for command in receiver.commands {
-                        send_void(&replicas, replica_id, Command(command));
+                let command_parts: Vec<&str> = command.split(":").collect();
+                let action: &str = command_parts.get(0).unwrap();
+                let replica_id: &str = command_parts.get(1).unwrap();
+                let replica_id: usize = match replica_id.trim().parse() {
+                    Ok(value) => value,
+                    Err(err) => {
+                        println!("{}", err);
+                        0
                     }
-                }
-                &_ => println!("The command is not parsable")
-            };
-        }
+                };
+
+                match action {
+                    "Q" => {
+                        let state = send_valued(
+                            &replicas,
+                            replica_id,
+                            ValuedCausalMessage::Query(Default::default()),
+                        ).await;
+
+                        for value in state {
+                            print!("{}", value)
+                        }
+                        println!()
+                    }
+                    "S" => {
+                        send_void(&replicas, replica_id, Sync);
+                    }
+                    "E" => {
+                        let state = send_valued(
+                            &replicas,
+                            replica_id,
+                            ValuedCausalMessage::Query(Default::default()),
+                        ).await;
+
+                        let mut receiver = LSeqReceiver::new(replica_id);
+                        InputField::start(String::from_iter(state.iter()), &mut receiver);
+
+                        for command in receiver.commands {
+                            send_void(&replicas, replica_id, Command(command));
+                        }
+                    }
+                    &_ => println!("The command is not parsable")
+                };
+            }
+        });
+
+        arbiter.join().unwrap();
     });
 
     system.run().unwrap();

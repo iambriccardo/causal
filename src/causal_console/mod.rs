@@ -1,7 +1,3 @@
-use std::io::Write;
-use std::thread::sleep;
-use std::time::Duration;
-
 use console::{Key, Term};
 
 pub trait InputReceiver {
@@ -63,7 +59,7 @@ impl InputField {
 
     fn render_value(&self, term: &Term) {
         term.clear_screen().unwrap();
-        let mut value = &mut self.value.clone();
+        let value = &mut self.value.clone();
         value.insert(self.cursor_position, '|');
         term.write_line(value).unwrap();
     }

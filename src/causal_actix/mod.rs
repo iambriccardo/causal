@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::fmt::Display;
+use std::marker::PhantomData;
 
 use actix::{Actor, Context, Handler, Recipient};
 use actix::prelude::*;
@@ -29,20 +29,22 @@ pub enum VoidCausalMessage<CMD, EVENT>
     Replicate(ReplicaId, SeqNr, VTime),
     // Message that represents the replicated events that the receiving replica will apply locally.
     Replicated(ReplicaId, SeqNr, Vec<Event<EVENT>>),
-    // Message that represents the querying of the replica's crdt state.
-    Query,
 }
 
+#[derive(MessageResponse)]
+pub struct State<STATE>(pub STATE);
+
 #[derive(Message)]
-#[rtype(result = "bool")]
-pub enum ValuedCausalMessage {
-    Query
+#[rtype(result = "State<STATE>")]
+pub enum ValuedCausalMessage<STATE: 'static> {
+    // Message that represents the querying of the replica's crdt state.
+    Query(PhantomData<STATE>),
 }
 
 /** ACTORS **/
 pub struct Replica<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Unpin,
+          STATE: Send + Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
@@ -59,7 +61,7 @@ pub struct Replica<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STO
 /** IMPLEMENTATIONS **/
 impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Replica<C, STATE, CMD, EVENT, STORE>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Unpin,
+          STATE: Send + Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
@@ -154,19 +156,17 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> R
         }
     }
 
-    pub fn handle_query(&mut self) {
-        let state = self.replica_state
+    pub fn handle_query(&mut self) -> STATE {
+        self.replica_state
             .as_mut()
             .unwrap()
-            .process_query();
-
-        println!("DATA QUERIED");
+            .process_query()
     }
 }
 
 impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Actor for Replica<C, STATE, CMD, EVENT, STORE>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Unpin,
+          STATE: Send + Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
@@ -180,7 +180,7 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> A
 
 impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Handler<VoidCausalMessage<CMD, EVENT>> for Replica<C, STATE, CMD, EVENT, STORE>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Unpin,
+          STATE: Send + Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
@@ -209,28 +209,24 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> H
                 println!("@{}-[REPLICATED]->@{} with last_seq_nr:{}, n_events:{}", sender, self.init_id, last_seq_nr, events.len());
                 self.handle_replicated(sender, last_seq_nr, events);
             }
-            VoidCausalMessage::Query => {
-                println!("APP-[QUERY]->@{}", self.init_id);
-                self.handle_query();
-            }
         }
     }
 }
 
-impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Handler<ValuedCausalMessage> for Replica<C, STATE, CMD, EVENT, STORE>
+impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Handler<ValuedCausalMessage<STATE>> for Replica<C, STATE, CMD, EVENT, STORE>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Unpin,
+          STATE: Send + Unpin,
           CMD: Send + Unpin,
           EVENT: Send + Clone + Unpin,
           STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
 {
-    type Result = bool;
+    type Result = State<STATE>;
 
-    fn handle(&mut self, msg: ValuedCausalMessage, ctx: &mut Self::Context) -> Self::Result {
+    fn handle(&mut self, msg: ValuedCausalMessage<STATE>, _: &mut Self::Context) -> Self::Result {
         match msg {
-            ValuedCausalMessage::Query => {
-                println!("QUERYING");
-                true
+            ValuedCausalMessage::Query(_) => {
+                println!("APP-[QUERY]->@{}", self.init_id);
+                State(self.handle_query())
             }
         }
     }
