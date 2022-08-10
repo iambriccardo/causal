@@ -1,7 +1,7 @@
 use std::{io, thread};
 use std::collections::HashMap;
 
-use actix::{Actor, System};
+use actix::{Actor, Addr, System};
 
 use crate::causal_actix::{Replica, VoidCausalMessage, VoidCausalRecipient};
 use crate::causal_console::{InputField, InputReceiver};
@@ -22,28 +22,24 @@ mod causal_console;
 mod causal_utils;
 mod causal_lseq;
 
-fn send_void<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
-    replicas: &HashMap<ReplicaId, VoidCausalRecipient<CMD, EVENT>>,
+fn send_void<C, STATE, CMD, EVENT, STORE>(
+    replicas: &HashMap<ReplicaId, Addr<Replica<C, STATE, CMD, EVENT, STORE>>>,
     replica_id: ReplicaId,
     message: VoidCausalMessage<CMD, EVENT>,
-) {
+)
+    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+          STATE: Unpin,
+          CMD: Send + Unpin,
+          EVENT: Send + Clone + Unpin,
+          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
+{
     replicas
         .get(&replica_id)
         .unwrap()
+        .clone()
+        .recipient()
         .do_send(message);
-        //.expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
-}
-
-fn connect<CMD: Send + Unpin, EVENT: Send + Clone + Unpin>(
-    replicas: &HashMap<ReplicaId, VoidCausalRecipient<CMD, EVENT>>,
-    from: ReplicaId,
-    to: ReplicaId,
-) {
-    send_void(
-        replicas,
-        from,
-        Connect(to, replicas.get(&to).unwrap().clone()),
-    );
+    //.expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
 }
 
 fn start() {
@@ -60,14 +56,24 @@ fn start() {
                 LSeq::<char>::default(),
                 InMemory::<LSeq<char>, Vec<char>, LSeqCommand<char>, LSeqOperation<char>>::create(),
             );
-            replicas.insert(id, replica.start().recipient());
+            replicas.insert(id, replica.start());
         }
     });
 
-    for i in 0..replicas_number {
-        for j in (0..replicas_number).rev() {
-            if i != j {
-                connect(&replicas, i, j);
+    // We send a message to replica "from" indicating to connect to replica "to".
+    for from in 0..replicas_number {
+        for to in (0..replicas_number).rev() {
+            if from != to {
+                send_void(
+                    &replicas,
+                    from,
+                    Connect(to, replicas
+                        .get(&to)
+                        .unwrap()
+                        .clone()
+                        .recipient(),
+                    ),
+                );
             }
         }
     }
@@ -119,15 +125,14 @@ fn start() {
 
 struct LSeqReceiver {
     replica_id: ReplicaId,
-    commands: Vec<LSeqCommand<char>>
+    commands: Vec<LSeqCommand<char>>,
 }
 
 impl LSeqReceiver {
-
     fn new(replica_id: ReplicaId) -> LSeqReceiver {
         LSeqReceiver {
             replica_id,
-            commands: vec![]
+            commands: vec![],
         }
     }
 }

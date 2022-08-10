@@ -33,6 +33,12 @@ pub enum VoidCausalMessage<CMD, EVENT>
     Query,
 }
 
+#[derive(Message)]
+#[rtype(result = "bool")]
+pub enum ValuedCausalMessage {
+    Query
+}
+
 /** ACTORS **/
 pub struct Replica<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static>
     where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
@@ -108,7 +114,7 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> R
 
             replica_receiver
                 .do_send(Replicate(current_replica_id, seq_nr, version));
-                // .expect(&*format!("Error while sending [REPLICATE] request from {} to {}", self.init_id, replica_id));
+            // .expect(&*format!("Error while sending [REPLICATE] request from {} to {}", self.init_id, replica_id));
         }
     }
 
@@ -127,7 +133,7 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> R
             .get(&sender)
             .expect(&*format!("Replica {} doesn't know about replica {}", self.init_id, sender))
             .do_send(Replicated(current_replica_id, last_seq_nr, events));
-            // .expect("Error while sending [REPLICATED] request.");
+        // .expect("Error while sending [REPLICATED] request.");
     }
 
     pub fn handle_replicated(
@@ -206,6 +212,25 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> H
             VoidCausalMessage::Query => {
                 println!("APP-[QUERY]->@{}", self.init_id);
                 self.handle_query();
+            }
+        }
+    }
+}
+
+impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> Handler<ValuedCausalMessage> for Replica<C, STATE, CMD, EVENT, STORE>
+    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+          STATE: Unpin,
+          CMD: Send + Unpin,
+          EVENT: Send + Clone + Unpin,
+          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
+{
+    type Result = bool;
+
+    fn handle(&mut self, msg: ValuedCausalMessage, ctx: &mut Self::Context) -> Self::Result {
+        match msg {
+            ValuedCausalMessage::Query => {
+                println!("QUERYING");
+                true
             }
         }
     }

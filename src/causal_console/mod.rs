@@ -1,10 +1,10 @@
 use std::io::Write;
 use std::thread::sleep;
 use std::time::Duration;
+
 use console::{Key, Term};
 
 pub trait InputReceiver {
-
     fn insert_at(&mut self, position: usize, character: char);
 
     fn remove_at(&mut self, position: usize);
@@ -12,11 +12,10 @@ pub trait InputReceiver {
 
 pub struct InputField {
     cursor_position: usize,
-    value: String
+    value: String,
 }
 
 impl InputField {
-
     pub fn start(string: String, receiver: &mut impl InputReceiver) -> InputField {
         let mut input_field = InputField {
             cursor_position: 0,
@@ -41,11 +40,11 @@ impl InputField {
                     }
                     Key::ArrowRight => {
                         self.cursor_forward(&term);
-                    },
+                    }
                     Key::Char(character) => {
                         receiver.insert_at(self.cursor_position, character);
                         self.insert(&term, character);
-                    },
+                    }
                     Key::Backspace => {
                         receiver.remove_at(self.cursor_position);
                         self.remove(&term);
@@ -53,9 +52,9 @@ impl InputField {
                     Key::Enter => {
                         break;
                     }
-                    _ => { }
+                    _ => {}
                 }
-             }
+            }
         }
 
         term.clear_screen().unwrap();
