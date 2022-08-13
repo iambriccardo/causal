@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use crate::{Concurrent, Greater, VectorClock};
 
 /** TYPES **/
-pub type ReplicaId = usize;
+pub type ReplicaId = isize;
 pub type SeqNr = u64;
 pub type VTime = VectorClock<ReplicaId>;
 pub type ObservedMap = HashMap<ReplicaId, SeqNr>;
@@ -42,7 +42,7 @@ pub trait CRDT<STATE, CMD, EVENT>
     where EVENT: Clone
 {
     // Creates the default/identity of the CRDT.
-    fn default() -> Self;
+    fn default(replica_id: Option<ReplicaId>) -> Self;
     // Queries the state of the CRDT.
     fn query(&self) -> STATE;
     // Takes some operation send by the user, and changes it into event.

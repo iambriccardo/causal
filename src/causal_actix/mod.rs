@@ -231,3 +231,46 @@ impl<C: 'static, STATE: 'static, CMD: 'static, EVENT: 'static, STORE: 'static> H
         }
     }
 }
+
+
+/** UTILS **/
+pub fn send_void<C, STATE, CMD, EVENT, STORE>(
+    replicas: &HashMap<ReplicaId, Addr<Replica<C, STATE, CMD, EVENT, STORE>>>,
+    replica_id: ReplicaId,
+    message: VoidCausalMessage<CMD, EVENT>,
+)
+    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+          STATE: Send + Unpin,
+          CMD: Send + Unpin,
+          EVENT: Send + Clone + Unpin,
+          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
+{
+    replicas
+        .get(&replica_id)
+        .unwrap()
+        .clone()
+        .recipient()
+        .do_send(message);
+    //.expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
+}
+
+pub async fn send_valued<C, STATE, CMD, EVENT, STORE>(
+    replicas: &HashMap<ReplicaId, Addr<Replica<C, STATE, CMD, EVENT, STORE>>>,
+    replica_id: ReplicaId,
+    message: ValuedCausalMessage<STATE>,
+) -> STATE
+    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
+          STATE: Send + Unpin,
+          CMD: Send + Unpin,
+          EVENT: Send + Clone + Unpin,
+          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
+{
+    replicas
+        .get(&replica_id)
+        .unwrap()
+        .clone()
+        .send(message)
+        .await
+        .unwrap()
+        .0
+}

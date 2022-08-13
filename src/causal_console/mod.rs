@@ -42,8 +42,10 @@ impl InputField {
                         self.insert(&term, character);
                     }
                     Key::Backspace => {
-                        receiver.remove_at(self.cursor_position);
-                        self.remove(&term);
+                        if self.cursor_position > 0 {
+                            receiver.remove_at(self.cursor_position - 1);
+                            self.remove(&term);
+                        }
                     }
                     Key::Enter => {
                         break;
@@ -85,10 +87,8 @@ impl InputField {
     }
 
     fn remove(&mut self, term: &Term) {
-        if self.cursor_position > 0 {
-            self.value.remove(self.cursor_position - 1);
-            self.cursor_position -= 1;
-            self.render_value(&term);
-        }
+        self.value.remove(self.cursor_position - 1);
+        self.cursor_position -= 1;
+        self.render_value(&term);
     }
 }

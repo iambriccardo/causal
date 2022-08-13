@@ -3,14 +3,13 @@ use std::collections::HashMap;
 
 use actix::prelude::*;
 
-use crate::causal_actix::{Replica, ValuedCausalMessage, VoidCausalMessage};
+use crate::causal_actix::{Replica, send_valued, send_void, ValuedCausalMessage, VoidCausalMessage};
 use crate::causal_console::{InputField, InputReceiver};
 use crate::causal_core::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
-use crate::causal_lseq::{LSeq, LSeqCommand, LSeqOperation};
+use crate::causal_rga::{RGA, RGACommand, RGAOperation, RGAReceiver};
 use crate::causal_time::ClockComparison::{Concurrent, Greater};
 use crate::causal_time::VectorClock;
 use crate::causal_utils::InMemory;
-use crate::LSeqCommand::{Insert, Remove};
 use crate::VoidCausalMessage::{Command, Connect, Sync};
 
 mod causal_time;
@@ -20,50 +19,10 @@ mod causal_or_set;
 mod causal_console;
 mod causal_utils;
 mod causal_lseq;
-
-fn send_void<C, STATE, CMD, EVENT, STORE>(
-    replicas: &HashMap<ReplicaId, Addr<Replica<C, STATE, CMD, EVENT, STORE>>>,
-    replica_id: ReplicaId,
-    message: VoidCausalMessage<CMD, EVENT>,
-)
-    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Send + Unpin,
-          CMD: Send + Unpin,
-          EVENT: Send + Clone + Unpin,
-          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
-{
-    replicas
-        .get(&replica_id)
-        .unwrap()
-        .clone()
-        .recipient()
-        .do_send(message);
-    //.expect(&*format!("The delivery of the message to replica {} failed!", replica_id));
-}
-
-async fn send_valued<C, STATE, CMD, EVENT, STORE>(
-    replicas: &HashMap<ReplicaId, Addr<Replica<C, STATE, CMD, EVENT, STORE>>>,
-    replica_id: ReplicaId,
-    message: ValuedCausalMessage<STATE>,
-) -> STATE
-    where C: CRDT<STATE, CMD, EVENT> + Clone + Unpin,
-          STATE: Send + Unpin,
-          CMD: Send + Unpin,
-          EVENT: Send + Clone + Unpin,
-          STORE: EventStore<C, STATE, CMD, EVENT> + Unpin
-{
-    replicas
-        .get(&replica_id)
-        .unwrap()
-        .clone()
-        .send(message)
-        .await
-        .unwrap()
-        .0
-}
+mod causal_rga;
 
 fn start() {
-    let replicas_number: usize = 3;
+    let replicas_number: isize = 3;
     let system = System::new();
     let mut replicas = HashMap::new();
 
@@ -73,8 +32,8 @@ fn start() {
             // For each replica we will craft specific messages that will trigger actions towards the CRDT.
             let replica = Replica::create(
                 id,
-                LSeq::<char>::default(),
-                InMemory::<LSeq<char>, Vec<char>, LSeqCommand<char>, LSeqOperation<char>>::create(),
+                RGA::<char>::default(Some(id)),
+                InMemory::<RGA<char>, Vec<char>, RGACommand<char>, RGAOperation<char>>::create(),
             );
             replicas.insert(id, replica.start());
         }
@@ -115,7 +74,7 @@ fn start() {
                 let command_parts: Vec<&str> = command.split(":").collect();
                 let action: &str = command_parts.get(0).unwrap();
                 let replica_id: &str = command_parts.get(1).unwrap();
-                let replica_id: usize = match replica_id.trim().parse() {
+                let replica_id: isize = match replica_id.trim().parse() {
                     Ok(value) => value,
                     Err(err) => {
                         println!("{}", err);
@@ -146,7 +105,7 @@ fn start() {
                             ValuedCausalMessage::Query(Default::default()),
                         ).await;
 
-                        let mut receiver = LSeqReceiver::new(replica_id);
+                        let mut receiver = RGAReceiver::new();
                         InputField::start(String::from_iter(state.iter()), &mut receiver);
 
                         for command in receiver.commands {
@@ -164,33 +123,11 @@ fn start() {
     system.run().unwrap();
 }
 
-struct LSeqReceiver {
-    replica_id: ReplicaId,
-    commands: Vec<LSeqCommand<char>>,
-}
-
-impl LSeqReceiver {
-    fn new(replica_id: ReplicaId) -> LSeqReceiver {
-        LSeqReceiver {
-            replica_id,
-            commands: vec![],
-        }
-    }
-}
-
-impl InputReceiver for LSeqReceiver {
-    fn insert_at(&mut self, position: usize, character: char) {
-        self.commands.push(Insert(position, self.replica_id, character));
-    }
-
-    fn remove_at(&mut self, position: usize) {
-        self.commands.push(Remove(position))
-    }
-}
-
 // TODO:
 // * Try a socket based implementation.
 // * Implement more complex operation-based CRDTs.
+// * Reduce duplication of in-memory event store.
+// * Implement more extensive unit tests for CRDTs.
 fn main() {
     start();
 }

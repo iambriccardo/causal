@@ -2,11 +2,13 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 
-use crate::{CRDT, Event, EventStore, ReplicaState};
+use crate::{CRDT, Event, EventStore, ReplicaId, ReplicaState};
 use crate::causal_core::{SeqNr, VTime};
+use crate::causal_or_set::SetCommand::{Add, Remove};
 use crate::causal_or_set::SetOperation::{Added, Removed};
 use crate::causal_utils::InMemory;
 
+#[allow(dead_code)]
 pub enum SetCommand<T>
     where T: Clone + Eq + PartialEq + Hash + Display
 {
@@ -62,7 +64,7 @@ impl<T> Clone for ORSet<T>
 impl<T> CRDT<BinarySet<T>, SetCommand<T>, SetOperation<T>> for ORSet<T>
     where T: Clone + Eq + PartialEq + Hash + Display
 {
-    fn default() -> Self {
+    fn default(_: Option<ReplicaId>) -> Self {
         ORSet {
             elements: BinarySet(HashSet::new())
         }
@@ -77,8 +79,8 @@ impl<T> CRDT<BinarySet<T>, SetCommand<T>, SetOperation<T>> for ORSet<T>
 
     fn prepare(&self, command: &SetCommand<T>) -> SetOperation<T> {
         match command {
-            SetCommand::Add(value) => Added(value.clone()),
-            SetCommand::Remove(value_to_remove) => {
+            Add(value) => Added(value.clone()),
+            Remove(value_to_remove) => {
                 Removed(self.elements.0
                     .iter()
                     .filter(|(value, _)| value == value_to_remove)
@@ -92,10 +94,10 @@ impl<T> CRDT<BinarySet<T>, SetCommand<T>, SetOperation<T>> for ORSet<T>
 
     fn effect(&mut self, event: &Event<SetOperation<T>>) {
         match &event.data {
-            SetOperation::Added(value) => {
+            Added(value) => {
                 self.elements.0.insert((value.clone(), event.version.clone()));
             }
-            SetOperation::Removed(versions) => {
+            Removed(versions) => {
                 self.elements = BinarySet(self.elements.0.iter()
                     .filter(|(_, version)| { !versions.contains(&version) })
                     .cloned()

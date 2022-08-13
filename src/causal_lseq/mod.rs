@@ -2,22 +2,22 @@ use std::cmp;
 use std::cmp::Ordering;
 use std::cmp::Ordering::{Greater, Less};
 
-use crate::{CRDT, Event, EventStore, InMemory, ReplicaId, ReplicaState};
+use crate::{CRDT, Event, EventStore, InMemory, InputReceiver, ReplicaId, ReplicaState};
 use crate::causal_core::SeqNr;
 use crate::causal_lseq::LSeqCommand::{Insert, Remove};
 use crate::causal_lseq::LSeqOperation::{Inserted, Removed};
 
 type Sequence = Vec<u8>;
 
-pub struct VPtr {
+pub struct LSeqPtr {
     sequence: Sequence,
     replica_id: ReplicaId,
 }
 
-impl VPtr {
-    fn from(replica_id: ReplicaId, low: &Sequence, high: &Sequence) -> VPtr {
-        VPtr {
-            sequence: VPtr::generate_seq(low, high),
+impl LSeqPtr {
+    fn from(replica_id: ReplicaId, low: &Sequence, high: &Sequence) -> LSeqPtr {
+        LSeqPtr {
+            sequence: LSeqPtr::generate_seq(low, high),
             replica_id,
         }
     }
@@ -40,23 +40,23 @@ impl VPtr {
     }
 }
 
-impl Clone for VPtr {
+impl Clone for LSeqPtr {
     fn clone(&self) -> Self {
-        VPtr {
+        LSeqPtr {
             sequence: self.sequence.clone(),
             replica_id: self.replica_id.clone(),
         }
     }
 }
 
-impl PartialEq<Self> for VPtr {
+impl PartialEq<Self> for LSeqPtr {
     fn eq(&self, other: &Self) -> bool {
         let matching = self.sequence.iter().zip(other.sequence.iter()).filter(|&(a, b)| a == b).count();
         matching == self.sequence.len() && matching == other.sequence.len() && self.replica_id == other.replica_id
     }
 }
 
-impl PartialOrd for VPtr {
+impl PartialOrd for LSeqPtr {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let length = cmp::min(self.sequence.len(), other.sequence.len());
 
@@ -96,14 +96,14 @@ pub enum LSeqCommand<T>
 pub enum LSeqOperation<T>
     where T: Clone
 {
-    Inserted(VPtr, T),
-    Removed(VPtr),
+    Inserted(LSeqPtr, T),
+    Removed(LSeqPtr),
 }
 
 pub struct LSeq<T>
     where T: Clone
 {
-    elements: Vec<(VPtr, T)>,
+    elements: Vec<(LSeqPtr, T)>,
 }
 
 impl<T> Clone for LSeq<T>
@@ -119,7 +119,7 @@ impl<T> Clone for LSeq<T>
 impl<T> CRDT<Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for LSeq<T>
     where T: Clone
 {
-    fn default() -> Self {
+    fn default(_: Option<ReplicaId>) -> Self {
         LSeq {
             elements: vec![]
         }
@@ -143,7 +143,7 @@ impl<T> CRDT<Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for LSeq<T>
 
                 println!("Inserting at pos {}", index);
 
-                Inserted(VPtr::from(replica_id.clone(), &left, &right), value.clone())
+                Inserted(LSeqPtr::from(replica_id.clone(), &left, &right), value.clone())
             }
             Remove(index) => {
                 Removed(self.elements[*index].0.clone())
@@ -203,63 +203,88 @@ impl<T> EventStore<LSeq<T>, Vec<T>, LSeqCommand<T>, LSeqOperation<T>> for InMemo
     }
 }
 
+pub struct LSeqReceiver {
+    pub replica_id: ReplicaId,
+    pub commands: Vec<LSeqCommand<char>>,
+}
+
+impl LSeqReceiver {
+    #[allow(dead_code)]
+    pub fn new(replica_id: ReplicaId) -> LSeqReceiver {
+        LSeqReceiver {
+            replica_id,
+            commands: vec![],
+        }
+    }
+}
+
+impl InputReceiver for LSeqReceiver {
+    fn insert_at(&mut self, position: usize, character: char) {
+        self.commands.push(Insert(position, self.replica_id, character));
+    }
+
+    fn remove_at(&mut self, position: usize) {
+        self.commands.push(Remove(position))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::causal_lseq::{Sequence, VPtr};
+    use crate::causal_lseq::{LSeqPtr, Sequence};
 
     #[test]
     fn test_generate_seq_empty() {
-        let low = VPtr::new(0);
-        let high = VPtr::new(1);
+        let low = LSeqPtr::new(0);
+        let high = LSeqPtr::new(1);
 
         let expected_sequence: Sequence = vec![1];
-        let sequence = VPtr::generate_seq(&low.sequence, &high.sequence);
+        let sequence = LSeqPtr::generate_seq(&low.sequence, &high.sequence);
 
         assert_eq!(expected_sequence, sequence);
     }
 
     #[test]
     fn test_generate_seq_start() {
-        let low = VPtr::new(0);
-        let mut high = VPtr::new(1);
+        let low = LSeqPtr::new(0);
+        let mut high = LSeqPtr::new(1);
         high.sequence = vec![1];
 
         let expected_sequence: Sequence = vec![0, 1];
-        let sequence = VPtr::generate_seq(&low.sequence, &high.sequence);
+        let sequence = LSeqPtr::generate_seq(&low.sequence, &high.sequence);
 
         assert_eq!(expected_sequence, sequence);
     }
 
     #[test]
     fn test_generate_seq_end() {
-        let mut low = VPtr::new(0);
+        let mut low = LSeqPtr::new(0);
         low.sequence = vec![1];
-        let high = VPtr::new(1);
+        let high = LSeqPtr::new(1);
 
         let expected_sequence: Sequence = vec![2];
-        let sequence = VPtr::generate_seq(&low.sequence, &high.sequence);
+        let sequence = LSeqPtr::generate_seq(&low.sequence, &high.sequence);
 
         assert_eq!(expected_sequence, sequence);
     }
 
     #[test]
     fn test_generate_seq_middle() {
-        let mut low = VPtr::new(0);
+        let mut low = LSeqPtr::new(0);
         low.sequence = vec![1];
-        let mut high = VPtr::new(1);
+        let mut high = LSeqPtr::new(1);
         high.sequence = vec![2];
 
         let expected_sequence: Sequence = vec![1, 1];
-        let sequence = VPtr::generate_seq(&low.sequence, &high.sequence);
+        let sequence = LSeqPtr::generate_seq(&low.sequence, &high.sequence);
 
         assert_eq!(expected_sequence, sequence);
     }
 
     #[test]
     fn test_eq() {
-        let mut low = VPtr::new(0);
+        let mut low = LSeqPtr::new(0);
         low.sequence = vec![1];
-        let mut high = VPtr::new(0);
+        let mut high = LSeqPtr::new(0);
         high.sequence = vec![1];
 
         assert!(low == high);
@@ -267,9 +292,9 @@ mod tests {
 
     #[test]
     fn test_ord() {
-        let mut low = VPtr::new(0);
+        let mut low = LSeqPtr::new(0);
         low.sequence = vec![1];
-        let mut high = VPtr::new(0);
+        let mut high = LSeqPtr::new(0);
         high.sequence = vec![2];
 
         assert!(low < high);
@@ -277,9 +302,9 @@ mod tests {
 
     #[test]
     fn test_multiple_ord() {
-        let mut low = VPtr::new(0);
+        let mut low = LSeqPtr::new(0);
         low.sequence = vec![1, 1];
-        let mut high = VPtr::new(0);
+        let mut high = LSeqPtr::new(0);
         high.sequence = vec![1, 2];
 
         assert!(low < high);
@@ -287,9 +312,9 @@ mod tests {
 
     #[test]
     fn test_ord_different_lengths() {
-        let mut low = VPtr::new(0);
+        let mut low = LSeqPtr::new(0);
         low.sequence = vec![1, 1];
-        let mut high = VPtr::new(0);
+        let mut high = LSeqPtr::new(0);
         high.sequence = vec![1, 1, 1];
 
         assert!(low < high);
